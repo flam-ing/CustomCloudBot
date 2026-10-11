@@ -6,6 +6,17 @@ const VIEWS=[['browser','브라우저'],['terminal','터미널'],['files','파�
 const el=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
 const actionButton=(label,text=label)=>{const button=el('button',text,'workspace-button');button.type='button';button.setAttribute('aria-label',label);button.title=label;return button;};
 
+// X11 keysyms carry case: a lowercase keysym can cancel Shift in x11vnc.
+export function sendChromeShortcut(rfb,key,shift=false) {
+  const letter=shift?key.toUpperCase():key.toLowerCase(),code='Key'+key.toUpperCase();
+  rfb.sendKey(0xffe3,'ControlLeft',true);
+  if(shift)rfb.sendKey(0xffe1,'ShiftLeft',true);
+  rfb.sendKey(letter.charCodeAt(0),code);
+  if(shift)rfb.sendKey(0xffe1,'ShiftLeft',false);
+  rfb.sendKey(0xffe3,'ControlLeft',false);
+  rfb.focus();
+}
+
 export function browserFramePoint(rect,width,height,clientX,clientY) {
   if(!(width>0&&height>0&&rect.width>0&&rect.height>0))return null;
   const scale=Math.min(rect.width/width,rect.height/height),left=rect.left+(rect.width-width*scale)/2,top=rect.top+(rect.height-height*scale)/2;
@@ -97,7 +108,7 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
     let rfb=null,disposed=false,connected=false;
     const active=()=>!disposed&&current(generation)&&!signal.aborted;
     const controls=()=>{for(const button of[newTab,incognito,extensions])button.disabled=!connected;};controls();
-    const shortcut=(key,shift=false)=>{if(!connected||!active())return;rfb.sendKey(0xffe3,'ControlLeft',true);if(shift)rfb.sendKey(0xffe1,'ShiftLeft',true);rfb.sendKey(key.toLowerCase().charCodeAt(0),'Key'+key.toUpperCase());if(shift)rfb.sendKey(0xffe1,'ShiftLeft',false);rfb.sendKey(0xffe3,'ControlLeft',false);rfb.focus();};
+    const shortcut=(key,shift=false)=>{if(connected&&active())sendChromeShortcut(rfb,key,shift);};
     newTab.onclick=()=>shortcut('t');incognito.onclick=()=>shortcut('n',true);
     extensions.onclick=()=>{if(!connected)return;shortcut('t');shortcut('l');for(const char of 'chrome://extensions/')rfb.sendKey(char.charCodeAt(0),null);rfb.sendKey(0xff0d,'Enter');rfb.focus();};
     fullscreen.onclick=()=>void enterDesktopScreen(panel);
