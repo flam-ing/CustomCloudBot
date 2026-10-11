@@ -10,10 +10,11 @@ async function get(path) {
   assert.equal(response.status, 200, `${path}: HTTP ${response.status}`);
   return response;
 }
-const [health, session, manifest, worker] = await Promise.all([
+const [health, session, manifest, brand, worker] = await Promise.all([
   get('/api/health').then(r=>r.json()),
   get('/api/session').then(r=>r.json()),
   get('/manifest.webmanifest').then(r=>r.json()),
+  get('/api/brand').then(r=>r.json()),
   get('/sw.js').then(async r=>({type:r.headers.get('content-type'),text:await r.text()})),
 ]);
 assert.equal(health.ok, true);
@@ -21,10 +22,10 @@ assert.ok(health.release && health.release !== 'development', 'Missing productio
 if (expectedRelease) assert.equal(health.release, expectedRelease);
 assert.equal(session.user, null, 'Public check must not be authenticated');
 assert.equal(session.model?.configured, true);
-assert.equal(session.model?.backend, 'openclaw');
-assert.equal(manifest.name, 'OpenClawBot');
+assert.ok(typeof brand.name === 'string' && brand.name.trim(), 'Missing configured product name');
+assert.equal(manifest.name, brand.name);
 assert.equal(manifest.start_url, '/');
 assert.equal(manifest.scope, '/');
 assert.match(worker.type || '', /javascript/);
 assert.ok(worker.text.includes('push'), 'Push service worker missing');
-console.log(JSON.stringify({origin:origin.origin,release:health.release,backend:session.model.backend,pwa:manifest.name,verified:'public HTTPS/configuration only'}, null, 2));
+console.log(JSON.stringify({origin:origin.origin,release:health.release,backend:session.model.backend || 'api',pwa:manifest.name,verified:'public HTTPS/configuration only'}, null, 2));

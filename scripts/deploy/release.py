@@ -100,7 +100,7 @@ def run(*args, cwd=None, capture=False):
                           stdout=subprocess.PIPE if capture else None).stdout
 
 def fetch(url):
-    request = urllib.request.Request(url, headers={'User-Agent': 'OpenClawBot-deploy'})
+    request = urllib.request.Request(url, headers={'User-Agent': 'CustomCloudBot-deploy'})
     return urllib.request.urlopen(request, timeout=60)
 
 def validate_sha(value):

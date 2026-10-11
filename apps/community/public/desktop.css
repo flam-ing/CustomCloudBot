@@ -8,7 +8,7 @@
 .workspace-button:hover:not(:disabled) { background:#ffffff0c; color:#eef2f8; }
 .workspace-button:disabled { opacity:.35; cursor:default; }
 .workspace-button:focus-visible,.workspace-address:focus-visible { outline:2px solid #97bdd6; outline-offset:2px; }
-.workspace-close { font-size:23px; line-height:1; }
+.workspace-close { font-size:30px; line-height:1; }
 .workspace-tabs { display:flex; flex:none; align-items:center; gap:3px; border-bottom:1px solid #ffffff0c; padding:0 12px 9px; }
 .workspace-tabs .workspace-button { font-size:12px; padding:6px 12px; color:#929da9; }
 .workspace-tabs .workspace-button[aria-selected="true"] { background:#e2edff0e; color:#e3ecf7; }
@@ -52,6 +52,8 @@
 .workspace-popup .desktop-head { cursor:move; touch-action:none; user-select:none; padding:8px 11px; background:#1d2028; border-bottom:1px solid #ffffff08; }
 .workspace-popup .desktop-head strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px; }
 .workspace-window-actions { display:flex; align-items:center; gap:3px; flex:none; }
+.workspace-window-actions .workspace-button { width:29px; height:29px; padding:0; }
+.workspace-window-actions .workspace-button:not(.workspace-close) { font-size:24px; line-height:1; }
 .workspace-popup .workspace-tabs { padding:5px 9px; }
 .workspace-popup:fullscreen { width:100%!important; height:100%!important; inset:0!important; border:0; border-radius:0; }
 .workspace-resize-handle { position:absolute; right:0; bottom:0; width:22px; height:22px; min-height:0; padding:0; border:0; border-radius:0; background:linear-gradient(135deg,transparent 53%,#8997aa70 54%,#8997aa70 58%,transparent 59%,transparent 69%,#8997aa70 70%,#8997aa70 74%,transparent 75%); cursor:nwse-resize; touch-action:none; z-index:1; }

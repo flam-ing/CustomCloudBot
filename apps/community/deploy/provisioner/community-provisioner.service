@@ -1,5 +1,5 @@
 [Unit]
-Description=Bounded per-room OpenClawBot desktop broker
+Description=Bounded per-room CustomCloudBot desktop broker
 Requires=docker.service community-desktop-firewall.service
 After=docker.service community-desktop-firewall.service
 [Service]

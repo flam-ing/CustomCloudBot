@@ -1,5 +1,5 @@
 [Unit]
-Description=Aggregate resource budget for all OpenClawBot containers
+Description=Aggregate resource budget for all CustomCloudBot containers
 [Slice]
 CPUAccounting=true
 MemoryAccounting=true

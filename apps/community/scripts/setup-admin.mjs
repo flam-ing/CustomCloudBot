@@ -13,6 +13,7 @@ import {accessSync, constants} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {promisify} from 'node:util';
 import {randomBytes} from 'node:crypto';
+import {DEFAULT_BOT_NAME} from '../setup-vault.mjs';
 const execute=promisify(execFile);
 const origin='http://127.0.0.1:8788';
 const required=(name)=>{const value=process.env[name]?.trim();if(!value)throw new Error(`${name} is required`);return value;};
@@ -35,9 +36,14 @@ const remoteRead=`python3 -c 'from pathlib import Path; p=Path("${remoteEnv}"); 
 const {stdout}=await execute('ssh',['-o','BatchMode=yes','-o','ConnectTimeout=10','-o','StrictHostKeyChecking=yes','-i',sshKey,sshHost,remoteRead],{maxBuffer:4096,timeout:15000});
 let invite=stdout.trim();
 if(!invite)throw new Error('Bootstrap invitation unavailable');
+let siteName=DEFAULT_BOT_NAME;
+try {
+ const response=await fetch(site+'/api/brand',{redirect:'error',signal:AbortSignal.timeout(5000)});
+ if(response.ok){const brand=await response.json();if(typeof brand.name==='string'&&brand.name.trim()&&brand.name.length<=80)siteName=brand.name.trim();}
+} catch {}
 let used=false,attempts=0,busy=false;
 const esc=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const html=(error='')=>`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenClawBot 관리자 설정</title><style>body{background:#111;color:#eee;font:14px system-ui;max-width:420px;margin:12vh auto;padding:24px}label{display:block;margin:18px 0 6px}input,button{box-sizing:border-box;width:100%;padding:12px;background:#222;color:#eee;border:1px solid #444;border-radius:6px}button{margin-top:24px;cursor:pointer}p{line-height:1.7;color:#aaa}strong{color:#ddd}</style><h1>관리자 계정 만들기</h1><p>배포된 <strong>OpenClawBot</strong>에서 사용할 계정입니다. 초대 코드는 자동으로 적용됩니다.</p>${error?`<p role="alert">${esc(error)}</p>`:''}<form method="post" action="/register"><input type="hidden" name="csrf" value="${session}"><label for="username">아이디</label><input id="username" name="username" autocomplete="username" pattern="[a-z0-9_]{3,40}" minlength="3" maxlength="40" required><label for="displayName">표시 이름</label><input id="displayName" name="displayName" maxlength="80" required><label for="password">비밀번호 · 10자 이상</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="256" required><button>계정 만들기</button></form><details style="margin-top:24px"><summary>가입 코드 보기 · 첫 관리자용</summary><p>아래 코드는 첫 관리자 가입에 한 번 사용됩니다. 위 양식에서는 자동 적용됩니다.</p><code style="display:block;overflow-wrap:anywhere;user-select:all">${esc(invite)}</code></details><p>등록 후 <a style="color:#ddd" href="${site}">실제 웹사이트</a>의 로그인 화면으로 이동합니다.</p></html>`;
+const html=(error='')=>`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(siteName)} 관리자 설정</title><style>body{background:#111;color:#eee;font:14px system-ui;max-width:420px;margin:12vh auto;padding:24px}label{display:block;margin:18px 0 6px}input,button{box-sizing:border-box;width:100%;padding:12px;background:#222;color:#eee;border:1px solid #444;border-radius:6px}button{margin-top:24px;cursor:pointer}p{line-height:1.7;color:#aaa}strong{color:#ddd}</style><h1>관리자 계정 만들기</h1><p>배포된 <strong>${esc(siteName)}</strong>에서 사용할 계정입니다. 초대 코드는 자동으로 적용됩니다.</p>${error?`<p role="alert">${esc(error)}</p>`:''}<form method="post" action="/register"><input type="hidden" name="csrf" value="${session}"><label for="username">아이디</label><input id="username" name="username" autocomplete="username" pattern="[a-z0-9_]{3,40}" minlength="3" maxlength="40" required><label for="displayName">표시 이름</label><input id="displayName" name="displayName" maxlength="80" required><label for="password">비밀번호 · 10자 이상</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="256" required><button>계정 만들기</button></form><details style="margin-top:24px"><summary>가입 코드 보기 · 첫 관리자용</summary><p>아래 코드는 첫 관리자 가입에 한 번 사용됩니다. 위 양식에서는 자동 적용됩니다.</p><code style="display:block;overflow-wrap:anywhere;user-select:all">${esc(invite)}</code></details><p>등록 후 <a style="color:#ddd" href="${site}">실제 웹사이트</a>의 로그인 화면으로 이동합니다.</p></html>`;
 const server=createServer(async(req,res)=>{
  res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');res.setHeader('x-content-type-options','nosniff');
  res.setHeader('content-security-policy',"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");

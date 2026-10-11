@@ -1,9 +1,9 @@
 ---
 name: oci-openclaw-ops
-description: Operate and customize OpenClawBot on OCI Ampere A1 with Docker, a dedicated OpenClaw gateway, remote Linux Google Chrome, DNS/HTTPS, and PWA notifications. Use for this deployment's upgrades, diagnostics, domain moves, and reusable operating procedures.
+description: Operate and customize CustomCloudBot on OCI Ampere A1 with Docker, a dedicated OpenClaw gateway, remote Linux Google Chrome, DNS/HTTPS, and PWA notifications. Use for this deployment's upgrades, diagnostics, domain moves, and reusable operating procedures.
 ---
 
-# OCI OpenClawBot operations
+# OCI CustomCloudBot operations
 
 Keep the existing deployment usable while applying the requested customization. This skill records the tested architecture; it does not authorize new OCI resources, billing changes, provider switches, or credential sharing.
 
@@ -32,7 +32,7 @@ For public deployment validation, run:
 node <skill-directory>/scripts/check-public.mjs https://<site-host> <expected-git-sha>
 ```
 
-The check verifies public HTTPS, release identity, OpenClaw configuration, the PWA manifest and service worker. It does not prove successful model replies, authenticated desktop control, or delivery of an OS notification; validate those separately when affected by the change.
+The check verifies public HTTPS, release identity, configured model availability, the PWA manifest and service worker. It does not prove successful model replies, authenticated desktop control, or delivery of an OS notification; validate those separately when affected by the change.
 
 ## Finish with evidence
 

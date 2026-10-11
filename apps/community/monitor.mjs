@@ -21,6 +21,6 @@ export function explainMonitor(s) {
       `파일시스템 사용 가능: ${s.diskFreeGiB.toFixed(2)} GiB · 미할당: ${s.diskUnallocatedGiB.toFixed(2)} GiB`,
       ...s.filesystems.map(f => `${f.mount}: ${f.usedGiB.toFixed(2)} / ${f.totalGiB.toFixed(2)} GiB · 여유 ${f.freeGiB.toFixed(2)} GiB${f.usedPercent >= 85 ? ' — 공간 부족 주의' : ''}`),
     ] : []),
-    'OpenClawBot은 A1 전체 CPU·RAM을 OS 및 실행 중인 서비스와 공유합니다.',
+    '이 서비스는 A1 전체 CPU·RAM을 OS 및 실행 중인 서비스와 공유합니다.',
   ].join('\n');
 }

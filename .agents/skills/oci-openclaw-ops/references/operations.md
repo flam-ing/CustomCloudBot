@@ -36,7 +36,7 @@
 
 ## PWA/Web Push
 
-- Use one stable HTTPS hostname for installation. The manifest name is OpenClawBot; keep app id/start URL/scope deliberate when migrating.
+- Use one stable HTTPS hostname for installation. The manifest name follows the configured product name (default CustomCloudBot); keep app id/start URL/scope deliberate when migrating.
 - On supported iOS/iPadOS, users add the site to the Home Screen and launch that app before enabling push. Other browser installation and permission flows differ. Consult current vendor documentation when giving platform-specific instructions.
 - Notification permission requires a user's gesture. Use the app's enable/test controls, and distinguish provider acceptance from an actual OS notification. A browser's denied permission cannot be silently re-enabled by the app.
 - Never cache authentication, chat APIs or private media in the service worker. Push content stays generic, delivery is checked against current room/session permissions, and logout removes that session's subscription.

@@ -57,7 +57,7 @@ export class OpenClawHttpAdapter {
       let actions = 0;
       for (let callCount = 0; callCount < 5; callCount += 1) {
       const tools = browser && actions < 4 && callCount < 4 ? BROWSER_TOOL_DEFINITIONS.map((tool) => ({ type: "function", name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })) : [];
-      request.onProgress?.("model",callCount?"조회 결과 정리 중":"OpenClaw 답변 작성 중");
+      request.onProgress?.("model",callCount?"조회 결과 정리 중":"답변 작성 중");
       const response = await this.fetchImpl(this.endpoint, {
         method: "POST",
         redirect: "error",

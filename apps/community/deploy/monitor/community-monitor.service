@@ -1,5 +1,5 @@
 [Unit]
-Description=Read-only OpenClawBot host resource snapshot
+Description=Read-only CustomCloudBot host resource snapshot
 After=docker.service
 [Service]
 Type=oneshot

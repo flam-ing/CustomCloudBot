@@ -1,4 +1,4 @@
-# OpenClawBot 기반 공동 AI 작업 공간
+# CustomCloudBot 기반 공동 AI 작업 공간
 
 [사용 안내](../apps/community/README.md) · [소스 구성](../README.md#구성) · [CI 구성](../.github/workflows/ci.yml)
 
