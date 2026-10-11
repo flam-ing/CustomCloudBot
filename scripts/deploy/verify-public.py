@@ -34,7 +34,8 @@ def verify(origin, expected):
                  '/media/agent/waiting.webp', '/media/agent/waiting-poster.webp',
                  '/media/agent/error.webp', '/media/agent/error-poster.webp',
                  '/setup.js', '/setup.css', '/setup-guide', '/desktop.js', '/manifest.webmanifest',
-                 '/sw.js', '/icons/cloud-agent-v1-192.png', '/icons/cloud-agent-v1-maskable-512.png']:
+                 '/sw.js', '/icons/cloud-agent-v1-192.png', '/icons/app-icon-v2-512.png', '/icons/app-icon-v2-192.png',
+                 '/icons/app-icon-v2-180.png', '/icons/app-icon-v2-48.png']:
         with urllib.request.urlopen(origin + path, timeout=30) as response:
             if response.status != 200 or not response.read(1):
                 raise RuntimeError('Public asset unavailable: ' + path)

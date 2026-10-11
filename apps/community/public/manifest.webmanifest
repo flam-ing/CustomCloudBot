@@ -10,8 +10,8 @@
   "background_color": "#070707",
   "theme_color": "#070707",
   "icons": [
-    { "src": "/icons/cloud-agent-v1-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/cloud-agent-v1-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/cloud-agent-v1-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/icons/app-icon-v2-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/app-icon-v2-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/app-icon-v2-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

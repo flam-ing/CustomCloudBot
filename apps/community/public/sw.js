@@ -30,7 +30,7 @@ self.addEventListener("push", (event) => {
     body: typeof payload.body === "string" ? payload.body : "",
     tag: typeof payload.tag === "string" ? payload.tag : undefined,
     data: { url: safeUrl(payload.url) },
-    icon: "/icons/cloud-agent-v1-192.png",
+    icon: "/icons/app-icon-v2-192.png",
     badge: "/icons/cloud-agent-v1-48.png",
   };
   event.waitUntil(self.registration.showNotification(title, options));
