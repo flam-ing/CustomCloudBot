@@ -27,7 +27,7 @@ export function createPwaController({ api, getSession, toast = () => {} }) {
   const dialog = document.querySelector("#pwa-dialog");
   const dialogTitle = document.querySelector("#pwa-dialog-title");
   const dialogMessage = document.querySelector("#pwa-dialog-message");
-  const state = { session: null, registration: null, config: null, subscription: null, deferredInstall: null, epoch: 0, pushBusy: false, installBusy: false, installed: false, destroyed: false,
+  const state = { session: null, registration: null, config: null, subscription: null, deferredInstall: null, epoch: 0, pushBusy: false, installBusy: false, installed: false, destroyed: false, appOrigin: "", installHelpShown: false,
     supported: window.isSecureContext !== false && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window };
   const current = (epoch) => !state.destroyed && state.epoch === epoch && Boolean(state.session?.user?.id) && (!getSession || getSession()?.user?.id === state.session.user.id);
   const showDialog = (title, message) => {
@@ -42,8 +42,9 @@ export function createPwaController({ api, getSession, toast = () => {} }) {
     installButtons.forEach((button) => {
       button.classList.remove("is-hidden");
       button.hidden = false;
-      button.disabled = state.installBusy || standalone || state.installed;
-      button.textContent = standalone ? "앱으로 사용 중" : state.installed ? "앱 설치됨" : state.deferredInstall ? "앱으로 설치" : "앱으로 만들기";
+      const alternate=state.appOrigin && state.appOrigin!==window.location?.origin;
+      button.disabled = state.installBusy || (!alternate && (standalone || state.installed));
+      button.textContent = alternate ? "앱으로 만들기" : standalone ? "앱으로 사용 중" : state.installed ? "앱 설치됨" : state.deferredInstall ? "앱으로 설치" : "앱으로 만들기";
     });
   };
   const renderPush = () => {
@@ -149,7 +150,11 @@ export function createPwaController({ api, getSession, toast = () => {} }) {
     finally { if (current(epoch)) { state.pushBusy = false; renderPush(); } }
   };
   const install = async () => {
-    if (state.installBusy || isStandalone() || state.installed) return;
+    if (state.installBusy) return;
+    if (state.appOrigin && state.appOrigin!==window.location?.origin) {
+      window.location.assign(state.appOrigin+"/?install=1"); return;
+    }
+    if (isStandalone() || state.installed) return;
     const prompt = state.deferredInstall;
     if (!prompt) { showInstallHelp(); return; }
     state.deferredInstall = null;
@@ -173,6 +178,16 @@ export function createPwaController({ api, getSession, toast = () => {} }) {
   renderInstall();
   renderPush();
   return {
+    setAppOrigin(value) {
+      state.appOrigin="";
+      try { const url=new URL(value);if(url.protocol==="https:" && url.origin===value)state.appOrigin=value; } catch {}
+      renderInstall();
+      // Never automatically move an installed app to another origin: it leaves its scope.
+      if(state.appOrigin===window.location?.origin && window.location?.search?.includes("install=1") && !state.installHelpShown) {
+        state.installHelpShown=true;showInstallHelp();
+      }
+      return false;
+    },
     setSession(session) {
       if (state.session?.user?.id === session?.user?.id && state.session?.csrfToken === session?.csrfToken) { state.session = session; renderPush(); return; }
       state.epoch++;

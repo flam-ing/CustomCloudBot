@@ -4,40 +4,41 @@ export function resolveAgentPresence({ sending = false, rooms = [], hasError = f
   if (busy.some(room => room.stage === 'error')) return 'error';
   if (busy.some(room => !['accepted', 'model', 'queued', 'waiting'].includes(room.stage))) return 'working';
   if (busy.length || sending) return 'waiting';
-  return hasError ? 'error' : 'idle';
+  // Finishing a failed request must not immediately replace its error pose with idle.
+  return hasError || rooms.some(room => room.stage === 'error') ? 'error' : 'idle';
 }
-export function createAgentPresence({ mount, poster = '/media/agent/idle-poster.jpg' }) {
-  const video = document.createElement('video');
-  video.className = 'agent-presence-video'; video.muted = true; video.defaultMuted = true;
-  video.loop = true; video.autoplay = true; video.playsInline = true; video.preload = 'metadata'; video.poster = poster;
-  video.setAttribute('aria-hidden', 'true'); video.setAttribute('playsinline', ''); video.setAttribute('muted', ''); video.tabIndex = -1;
+export function createAgentPresence({ mount, poster = '/media/agent/idle-poster.webp' }) {
+  // Animated WebP retains the supplied videos' motion and alpha across browsers.
+  // The matte is removed once when preparing the assets, never per browser frame.
+  const character = document.createElement('img');
+  character.className = 'agent-presence-image'; character.alt = ''; character.decoding = 'async';
+  character.setAttribute('aria-hidden', 'true'); character.draggable = false;
   const label = document.createElement('span'); label.className = 'sr-only'; label.setAttribute('role', 'status');
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
-  let active = false, state = 'idle', loadedState = null, failed = false, generation = 0;
-  mount.append(video, label); mount.dataset.state = state;
+  let active = false, state = 'idle', source = null;
+  const failedSources = new Set();
+  mount.append(character, label); mount.dataset.state = state;
   function playback() {
-    if (!active || document.hidden || motion.matches || failed) { video.pause(); return; }
-    const sequence = generation;
-    const playing = video.play();
-    playing?.then(() => { if (sequence === generation) mount.classList.remove('is-paused'); }).catch(() => { if (sequence === generation) mount.classList.add('is-paused'); });
+    const animate = active && !document.hidden && !motion.matches;
+    const still = `/media/agent/${state}-poster.webp`;
+    const candidates = animate ? [`/media/agent/${state}.webp`, still, poster] : [still, poster];
+    const next = candidates.find(path => !failedSources.has(path)) || poster;
+    mount.classList.toggle('is-paused', !animate);
+    if (source !== next) { source = next; character.src = next; }
   }
   function set(next = 'idle', visible = true) {
     active = visible; state = Object.hasOwn(STATES, next) ? next : 'idle';
     mount.dataset.state = state; label.textContent = active ? STATES[state] : '';
     mount.setAttribute('aria-label', active ? `에이전트 · ${STATES[state]}` : '에이전트');
-    if (active && !motion.matches && loadedState !== state) {
-      loadedState = state; failed = false; generation += 1; mount.classList.remove('is-paused');
-      video.src = `/media/agent/${state}.mp4`; video.load();
-    }
     playback();
   }
-  function preferenceChanged() {
-    if (motion.matches) { video.pause(); video.removeAttribute('src'); video.load(); loadedState = null; }
-    else set(state, active);
+  function mediaError() {
+    failedSources.add(source);
+    playback();
   }
-  video.addEventListener('error', () => { failed = true; mount.classList.add('is-paused'); });
-  video.addEventListener('canplay', playback);
+  character.addEventListener('error', mediaError);
   document.addEventListener('visibilitychange', playback);
-  motion.addEventListener?.('change', preferenceChanged);
-  return { set, reset: () => set('idle', false), destroy() { active = false; video.pause(); video.removeAttribute('src'); video.load(); document.removeEventListener('visibilitychange', playback); motion.removeEventListener?.('change', preferenceChanged); mount.replaceChildren(); } };
+  motion.addEventListener?.('change', playback);
+  playback();
+  return { set, reset: () => set('idle', false), destroy() { active = false; character.removeEventListener('error', mediaError); character.removeAttribute('src'); document.removeEventListener('visibilitychange', playback); motion.removeEventListener?.('change', playback); mount.replaceChildren(); } };
 }

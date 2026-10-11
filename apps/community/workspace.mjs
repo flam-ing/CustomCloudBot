@@ -47,7 +47,7 @@ export function createWorkspaceHub({server,desktops,userFor,roomFor,originFor,to
     const url=new URL(req.url,'http://local'),match=url.pathname.match(terminalPath);if(!match)return;
     let user,roomId,base;
     try{
-      if(req.headers.origin!==originFor())return reject(socket,403);
+      if(!originFor(req)||req.headers.origin!==originFor(req))return reject(socket,403);
       user=userFor(req);if(!user)return reject(socket,401);
       roomId=match[1];roomFor(roomId,user);base=workspaceEndpoint(desktops.get(roomId));
       const raw=url.searchParams.get('ticket')||'';if(raw.length>100)return reject(socket,403);

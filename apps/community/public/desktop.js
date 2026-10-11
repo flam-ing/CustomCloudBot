@@ -1,4 +1,7 @@
-import {createWorkspaceTerminal} from '/workspace-terminal.js';
+import {createWorkspaceTerminal} from './workspace-terminal.js';
+import {configureDesktopInput,enterDesktopScreen} from './desktop-screen.js';
+import {createWorkspaceWindows,workspaceBounds} from './workspace-windows.js';
+let popupLayer=40;
 const VIEWS=[['browser','브라우저'],['terminal','터미널'],['files','파일']];
 const el=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
 const actionButton=(label,text=label)=>{const button=el('button',text,'workspace-button');button.type='button';button.setAttribute('aria-label',label);button.title=label;return button;};
@@ -20,20 +23,47 @@ async function boundedFile(url,signal,max=8*1024*1024) {
   return new Blob(parts,{type:response.headers.get('content-type')||'application/octet-stream'});
 }
 
-/** Three direct views of the shared workspace, scoped to the current room. */
-export function createDesktopUI({api,getRoomId,toast=()=>{},mount=null,initialView='browser',onViewChange=()=>{}}) {
-  const state={roomId:null,view:VIEWS.some(([id])=>id===initialView)?initialView:'browser',generation:0,abort:null,cleanup:null,destroyed:false,paths:new Map()};
+/** Independent room popups share the existing remote computer. */
+export function createDesktopUI({api,getRoomId,getRoomName=()=>'',toast=()=>{},mount=null,initialView='browser',onViewChange=()=>{}}) {
   const topbar=mount?.querySelector('.pane-bar')||document.querySelector('.topbar-actions');
-  const toggle=actionButton('작업 공간 열기','▣');toggle.className='icon-button desktop-button';toggle.setAttribute('aria-expanded','false');topbar?.append(toggle);
-  const panel=el('aside',undefined,'desktop-panel'+(mount?' desktop-inline':''));panel.setAttribute('aria-label','작업 공간');panel.hidden=true;
-  const head=el('div',undefined,'desktop-head'),title=el('strong','작업 공간'),close=actionButton('작업 공간 닫기','×');close.classList.add('workspace-close');head.append(title,close);
+  const toggle=actionButton('작업 공간 열기','▣');toggle.className='icon-button desktop-button';toggle.setAttribute('aria-expanded','false');toggle.hidden=true;topbar?.append(toggle);
+  const windows=createWorkspaceWindows({
+    createWindow:(roomId,options)=>createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,...options}),
+    onLimit:()=>toast('열어둔 작업 공간 하나를 닫은 뒤 다시 열어주세요.'),
+    onChange:({roomId,open})=>{toggle.hidden=!roomId;toggle.setAttribute('aria-expanded',String(open));},
+  });
+  toggle.onclick=()=>windows.toggle();
+  return {
+    setRoom:roomId=>windows.setRoom(roomId),
+    openRoom:roomId=>windows.openRoom(roomId||getRoomId?.()),
+    closeRoom:roomId=>windows.closeRoom(roomId),
+    reset:()=>windows.reset(),
+    destroy(){windows.destroy();toggle.remove();},
+  };
+}
+function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,index,onClose}) {
+  const state={roomId,view:VIEWS.some(([id])=>id===initialView)?initialView:'browser',generation:0,abort:null,cleanup:null,destroyed:false,paths:new Map()};
+  const panel=el('aside',undefined,'desktop-panel workspace-popup');panel.setAttribute('aria-label','작업 공간');panel.setAttribute('role','dialog');panel.dataset.roomId=roomId;panel.hidden=true;
+  const head=el('div',undefined,'desktop-head'),title=el('strong','작업 공간'),actions=el('div',undefined,'workspace-window-actions'),maximize=actionButton('작업 공간 확대','□'),close=actionButton('작업 공간 닫기','×');close.classList.add('workspace-close');actions.append(maximize,close);head.append(title,actions);head.tabIndex=0;head.title='드래그하여 이동 · 방향키로 위치 이동';head.setAttribute('aria-label','작업 공간 창 이동');
+  const resize=actionButton('작업 공간 크기 조절','');resize.className='workspace-resize-handle';resize.title='드래그 또는 방향키로 크기 조절';
+  let geometry=workspaceBounds({}, {width:innerWidth,height:innerHeight},(index%5)*28),beforeMaximize=null;
+  const raise=()=>{panel.style.zIndex=String(++popupLayer);};
+  const layout=next=>{geometry=workspaceBounds(next,{width:innerWidth,height:innerHeight});for(const [key,value]of Object.entries(geometry))panel.style[key]=value+'px';};
+  const restore=()=>{beforeMaximize=null;maximize.textContent='□';maximize.setAttribute('aria-label','작업 공간 확대');};
+  const setMaximized=()=>{if(beforeMaximize){const previous=beforeMaximize;restore();layout(previous);}else{beforeMaximize={...geometry};layout({left:8,top:8,width:innerWidth-16,height:innerHeight-16});maximize.textContent='❐';maximize.setAttribute('aria-label','작업 공간 크기 복원');}};
+  let drag=null;
+  const pointerDown=event=>{if(event.button!==0||event.target.closest('button')&&event.currentTarget!==resize)return;event.preventDefault();raise();restore();drag={target:event.currentTarget,id:event.pointerId,x:event.clientX,y:event.clientY,...geometry,resize:event.currentTarget===resize};drag.target.setPointerCapture?.(event.pointerId);};
+  const pointerMove=event=>{if(!drag||event.pointerId!==drag.id)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;layout(drag.resize?{...drag,width:drag.width+dx,height:drag.height+dy}:{...drag,left:drag.left+dx,top:drag.top+dy});};
+  const pointerUp=event=>{if(drag&&event.pointerId===drag.id){try{drag.target.releasePointerCapture?.(event.pointerId);}catch{}drag=null;}};
+  for(const target of [head,resize]){target.addEventListener('pointerdown',pointerDown);target.addEventListener('pointermove',pointerMove);target.addEventListener('pointerup',pointerUp);target.addEventListener('pointercancel',pointerUp);target.addEventListener('keydown',event=>{if(event.target!==target||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();restore();const amount=event.shiftKey?40:10,dx=event.key==='ArrowLeft'?-amount:event.key==='ArrowRight'?amount:0,dy=event.key==='ArrowUp'?-amount:event.key==='ArrowDown'?amount:0;layout(target===resize?{...geometry,width:geometry.width+dx,height:geometry.height+dy}:{...geometry,left:geometry.left+dx,top:geometry.top+dy});});}
+  maximize.onclick=setMaximized;head.ondblclick=event=>{if(!event.target.closest('button'))setMaximized();};panel.addEventListener('pointerdown',raise);
   const tabs=el('div',undefined,'workspace-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','작업 공간 보기');
   const buttons=new Map();
   for(const [id,label] of VIEWS){const button=actionButton(label);button.setAttribute('role','tab');button.dataset.view=id;button.onclick=()=>{if(state.view!==id){state.view=id;onViewChange(id);void activate();}};buttons.set(id,button);tabs.append(button);}
   tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const available=[...buttons.values()].filter(button=>!button.disabled),index=available.indexOf(document.activeElement);let next=event.key==='Home'?0:event.key==='End'?available.length-1:(index+(event.key==='ArrowRight'?1:-1)+available.length)%available.length;available[next]?.focus();available[next]?.click();});
   const bar=el('div',undefined,'workspace-statusbar'),status=el('span','','desktop-status'),retry=actionButton('작업 공간 다시 연결','다시 연결');status.setAttribute('role','status');bar.append(status,retry);
   const content=el('div',undefined,'workspace-content');content.setAttribute('role','tabpanel');
-  panel.append(head,tabs,content,bar);(mount||document.querySelector('.main-panel'))?.append(panel);
+  panel.append(head,tabs,content,bar,resize);document.body.append(panel);layout(geometry);
   const setStatus=(message,kind='')=>{status.textContent=message;status.dataset.kind=kind;};
   const stop=()=>{state.generation++;state.abort?.abort();state.abort=null;state.cleanup?.();state.cleanup=null;};
   const current=generation=>!state.destroyed&&state.generation===generation&&!panel.hidden&&!document.hidden;
@@ -61,50 +91,30 @@ export function createDesktopUI({api,getRoomId,toast=()=>{},mount=null,initialVi
     }catch(error){if(current(generation)){empty('작업 공간에 연결하지 못했습니다.');fail(error,generation);}}
   }
   function mountBrowser(base,generation,signal) {
-    const toolbar=el('form',undefined,'workspace-browser-toolbar'),back=actionButton('뒤로','←'),forward=actionButton('앞으로','→'),reload=actionButton('페이지 새로고침','↻'),address=el('input');address.type='text';address.className='workspace-address';address.setAttribute('aria-label','원격 브라우저 주소');address.placeholder='주소 입력';address.autocomplete='off';address.spellcheck=false;
-    toolbar.append(back,forward,reload,address);
-    const viewport=el('div',undefined,'workspace-browser-viewport'),image=el('img');image.alt='원격 브라우저 화면';image.draggable=false;image.className='workspace-browser-frame';
-    const keyboard=el('textarea');keyboard.className='workspace-browser-keyboard';keyboard.setAttribute('aria-label','원격 브라우저 키보드 입력');keyboard.autocomplete='off';keyboard.autocapitalize='off';keyboard.spellcheck=false;keyboard.rows=1;
-    const help=el('span','화면을 클릭해 조작하세요','workspace-browser-help');viewport.append(image,keyboard,help);content.replaceChildren(toolbar,viewport);
-    let frame=null,timer,scrollTimer,textTimer,pendingText='',frameRequest=null,queue=Promise.resolve(),queued=0,composing=false,scrollX=0,scrollY=0,disposed=false;
-    const active=()=>!disposed&&current(generation);
-    const schedule=()=>{clearTimeout(timer);if(active())timer=setTimeout(()=>{if(queued){schedule();return;}void capture();},1100);};
-    const capture=async()=>{
-      if(!active())return;if(frameRequest)return frameRequest;
-      frameRequest=(async()=>{
-        try{
-          const data=await api(base+'/browser/frame',{signal});if(!active())return;
-          if(typeof data.image!=='string'||data.image.length>12*1024*1024||!/^data:image\/(?:jpeg|png);base64,[a-zA-Z0-9+/=]+$/.test(data.image)||!Number.isFinite(data.width)||!Number.isFinite(data.height)||data.width<=0||data.height<=0)throw new Error('브라우저 화면을 읽지 못했습니다.');
-          frame=data;image.src=data.image;image.hidden=false;
-          if(document.activeElement!==address)address.value=typeof data.url==='string'?data.url:'';
-          image.alt=typeof data.title==='string'&&data.title?data.title:'원격 브라우저 화면';
-          setStatus('브라우저 연결됨','ready');
-        }catch(error){fail(error,generation);}finally{frameRequest=null;schedule();}
-      })();return frameRequest;
-    };
-    const action=value=>{
-      if(!active()||queued>=64)return;
-      queued++;clearTimeout(timer);
-      queue=queue.then(async()=>{if(!active())return;if(frameRequest)await frameRequest;if(!active())return;clearTimeout(timer);await api(base+'/browser/action',{method:'POST',body:JSON.stringify(value),signal});if(active()&&queued===1)await capture();}).catch(error=>fail(error,generation)).finally(()=>{queued--;if(!queued)schedule();});
-    };
-    toolbar.onsubmit=event=>{event.preventDefault();flushText();const value=address.value.trim();if(!value)return;let url;try{url=new URL(/^[a-z][a-z0-9+.-]*:/i.test(value)?value:'https://'+value);if(!['https:','http:'].includes(url.protocol))throw new Error();}catch{setStatus('http 또는 https 주소를 입력해주세요.','error');return;}action({type:'navigate',url:url.href});};
-    back.onclick=()=>{flushText();action({type:'back'});};forward.onclick=()=>{flushText();action({type:'forward'});};reload.onclick=()=>{flushText();action({type:'reload'});};
-    image.onclick=event=>{if(!frame)return;const point=browserFramePoint(image.getBoundingClientRect(),frame.width,frame.height,event.clientX,event.clientY);if(point){flushText();action({type:'click',...point});keyboard.focus({preventScroll:true});help.hidden=true;}};
-    function flushText(){clearTimeout(textTimer);const points=Array.from(pendingText);pendingText='';for(let offset=0;offset<points.length;offset+=2000)action({type:'type',text:points.slice(offset,offset+2000).join('')});}
-    const type=text=>{pendingText+=text;clearTimeout(textTimer);textTimer=setTimeout(flushText,180);};
-    const flush=()=>{if(!composing&&keyboard.value){type(keyboard.value);keyboard.value='';}};
-    keyboard.addEventListener('compositionstart',()=>{composing=true;});keyboard.addEventListener('compositionend',()=>{composing=false;flush();});keyboard.addEventListener('input',flush);
-    keyboard.addEventListener('keydown',event=>{
-      if(event.isComposing||composing||event.keyCode===229)return;
-      const modifier=event.ctrlKey||event.metaKey;if(modifier&&event.key.toLowerCase()==='v')return;
-      const special=['Enter','Tab','Backspace','Delete','Escape','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','PageUp','PageDown'];
-      if(!special.includes(event.key)&&!modifier&&!event.altKey)return;
-      if(['Shift','Control','Alt','Meta'].includes(event.key))return;
-      event.preventDefault();flush();flushText();const modifiers=[modifier?'Control':'',event.altKey?'Alt':'',event.shiftKey?'Shift':''].filter(Boolean);action({type:'key',key:[...modifiers,event.key].join('+')});
-    });
-    viewport.addEventListener('wheel',event=>{event.preventDefault();const factor=event.deltaMode===1?16:event.deltaMode===2?frame?.height||800:1;scrollX+=event.deltaX*factor;scrollY+=event.deltaY*factor;clearTimeout(scrollTimer);scrollTimer=setTimeout(()=>{flushText();action({type:'scroll',deltaX:Math.round(Math.max(-2000,Math.min(2000,scrollX))),deltaY:Math.round(Math.max(-2000,Math.min(2000,scrollY)))});scrollX=0;scrollY=0;},80);},{passive:false});
-    image.hidden=true;void capture();
-    return ()=>{disposed=true;clearTimeout(timer);clearTimeout(scrollTimer);clearTimeout(textTimer);pendingText='';image.removeAttribute('src');};
+    const toolbar=el('div',undefined,'workspace-chrome-toolbar'),label=el('span','Chrome','workspace-chrome-label'),newTab=actionButton('Chrome 새 탭','새 탭'),incognito=actionButton('Chrome 시크릿 창','시크릿'),extensions=actionButton('Chrome 확장 프로그램','확장 프로그램'),fullscreen=actionButton('브라우저 전체 화면','전체 화면');
+    toolbar.append(label,newTab,incognito,extensions,fullscreen);
+    const viewport=el('div',undefined,'workspace-chrome-viewport');viewport.setAttribute('aria-label','원격 Chrome 브라우저');content.replaceChildren(toolbar,viewport);
+    let rfb=null,disposed=false,connected=false;
+    const active=()=>!disposed&&current(generation)&&!signal.aborted;
+    const controls=()=>{for(const button of[newTab,incognito,extensions])button.disabled=!connected;};controls();
+    const shortcut=(key,shift=false)=>{if(!connected||!active())return;rfb.sendKey(0xffe3,'ControlLeft',true);if(shift)rfb.sendKey(0xffe1,'ShiftLeft',true);rfb.sendKey(key.toLowerCase().charCodeAt(0),'Key'+key.toUpperCase());if(shift)rfb.sendKey(0xffe1,'ShiftLeft',false);rfb.sendKey(0xffe3,'ControlLeft',false);rfb.focus();};
+    newTab.onclick=()=>shortcut('t');incognito.onclick=()=>shortcut('n',true);
+    extensions.onclick=()=>{if(!connected)return;shortcut('t');shortcut('l');for(const char of 'chrome://extensions/')rfb.sendKey(char.charCodeAt(0),null);rfb.sendKey(0xff0d,'Enter');rfb.focus();};
+    fullscreen.onclick=()=>void enterDesktopScreen(panel);
+    void(async()=>{
+      try{
+        const [{default:RFB},ticket]=await Promise.all([import('/vendor/novnc.js'),api(`/api/rooms/${encodeURIComponent(roomId)}/desktop/ticket`,{method:'POST',body:JSON.stringify({view:'browser'}),signal})]);
+        if(!active())return;
+        const endpoint=new URL(ticket.websocketPath,location.href);
+        if(endpoint.origin!==location.origin||endpoint.pathname!==`/api/rooms/${roomId}/desktop/ws`)throw new Error('브라우저 연결 주소를 확인할 수 없습니다.');
+        endpoint.protocol=location.protocol==='https:'?'wss:':'ws:';
+        rfb=new RFB(viewport,endpoint.href,{shared:true});configureDesktopInput(rfb,false);rfb.qualityLevel=7;rfb.compressionLevel=3;
+        rfb.addEventListener('connect',()=>{if(!active())return;connected=true;controls();setStatus('Chrome · 탭과 프로필은 브라우저 메뉴에서 관리할 수 있습니다.','ready');});
+        rfb.addEventListener('disconnect',()=>{connected=false;controls();if(active())setStatus('Chrome 연결이 종료됐습니다. 다시 연결해주세요.','error');});
+        rfb.addEventListener('securityfailure',()=>{if(active())setStatus('브라우저에 연결할 권한을 확인해주세요.','error');});
+      }catch(error){if(active())fail(error,generation);}
+    })();
+    return()=>{disposed=true;connected=false;controls();rfb?.disconnect();rfb=null;viewport.replaceChildren();};
   }
   function mountFiles(base,roomId,generation,signal) {
     const toolbar=el('div',undefined,'workspace-files-toolbar'),up=actionButton('상위 폴더','↑'),root=actionButton('작업 폴더','⌂'),refresh=actionButton('파일 목록 새로고침','↻'),path=el('span','','workspace-file-path');toolbar.append(up,root,refresh,path);
@@ -144,14 +154,11 @@ export function createDesktopUI({api,getRoomId,toast=()=>{},mount=null,initialVi
     up.onclick=()=>void load(directory.replace(/\/+$/,'').split('/').slice(0,-1).join('/'));root.onclick=()=>void load('');refresh.onclick=()=>void load(directory);void load(directory);
     return ()=>{request++;fileAbort?.abort();revoke();};
   }
-  const open=()=>{panel.hidden=false;toggle.setAttribute('aria-expanded','true');void activate();};
-  const hide=()=>{stop();panel.hidden=true;toggle.setAttribute('aria-expanded','false');content.replaceChildren();};
-  toggle.onclick=()=>panel.hidden?open():hide();close.onclick=hide;retry.onclick=()=>void activate();
+  const open=()=>{if(state.destroyed)return;title.textContent=(getRoomName(roomId)||'대화')+' · 작업 공간';panel.setAttribute('aria-label',title.textContent);raise();if(panel.hidden){panel.hidden=false;layout(geometry);void activate();}};
+  const hide=()=>{stop();panel.hidden=true;drag=null;content.replaceChildren();if(document.fullscreenElement===panel)document.exitFullscreen?.().catch(()=>{});};
+  close.onclick=onClose;retry.onclick=()=>void activate();
+  panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.target===head){event.preventDefault();onClose();}});
   const visibility=()=>{if(document.hidden)stop();else if(!panel.hidden)void activate();};document.addEventListener('visibilitychange',visibility);
-  return {
-    openRoom(roomId){this.setRoom(roomId||getRoomId?.());if(panel.hidden)open();},
-    setRoom(roomId){if(state.destroyed||state.roomId===roomId)return;stop();state.roomId=roomId||null;content.replaceChildren();toggle.hidden=!state.roomId;if(!state.roomId){hide();return;}open();},
-    reset(){stop();state.roomId=null;state.paths.clear();hide();toggle.hidden=true;},
-    destroy(){if(state.destroyed)return;this.reset();state.destroyed=true;document.removeEventListener('visibilitychange',visibility);panel.remove();toggle.remove();},
-  };
+  const viewportResize=()=>layout(beforeMaximize?{left:8,top:8,width:innerWidth-16,height:innerHeight-16}:geometry);window.addEventListener('resize',viewportResize);
+  return {open,close:hide,destroy(){if(state.destroyed)return;hide();state.destroyed=true;state.paths.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',viewportResize);panel.remove();}};
 }

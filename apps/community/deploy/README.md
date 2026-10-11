@@ -66,6 +66,14 @@ For external services, start from [../integrations.example.json](../integrations
 
 Optional Web Push uses `COMMUNITY_PUSH_SUBJECT`, `COMMUNITY_PUSH_PUBLIC_KEY` and `COMMUNITY_PUSH_PRIVATE_KEY`. Leave all three empty to disable it. HTTPS, browser permission and an actual device delivery check are required for notifications.
 
+## Optional installed-app origin
+
+Leave `COMMUNITY_APP_ORIGIN` empty to install the PWA from the regular `COMMUNITY_ORIGIN`. If an existing installed app needs a separate address, set this optional value privately to an exact HTTPS origin, such as `https://app.example.com`, with no trailing slash, path, query or credentials. A public IP is also supported when it has a valid HTTPS certificate. `COMMUNITY_ORIGIN` remains required and remains the canonical web/release address.
+
+Configure Caddy to proxy both exact hosts to the same application, with valid certificates for each; do not redirect the installed-app host to the other origin. The templates do not provision this second host automatically. Requests and authenticated desktop/terminal connections must match the origin for their actual host; configuring two hosts does not permit cross-origin API access.
+
+The install button opens the configured app origin only when clicked. Already installed apps never automatically change origin, because that would leave their installed scope and show a browser address bar. Install again from the desired origin if changing an existing app's address. Login cookies and notification permissions are separate for each origin; users sign in and enable notifications again at the new address. Application accounts, conversations and stored credentials remain in the same server data volume.
+
 ## Host dashboard and optional provisioning
 
 `monitor/community.slice` allows this deployment to use the host's CPU and RAM, with swap disabled and a task cap. The OS and other services still share those physical resources. This is a resource policy, not an OCI Free Tier guarantee. The collector reads host memory, CPU, physical disks and mounted filesystems, avoiding duplicate mounts; it does not query cloud billing or other instances.

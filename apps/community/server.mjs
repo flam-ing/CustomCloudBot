@@ -1,3 +1,4 @@
+import { createOriginPolicy } from "./app-origin.mjs";
 import { createServer } from "node:http";
 import {
   randomBytes,
@@ -179,7 +180,8 @@ export async function startCommunity(options = {}) {
   refreshModelConnections();
   const activeBackend = () => setupVault.backend || (pool.configured && openClaw ? "auto" : pool.configured ? "api" : openClaw ? "gateway" : demo ? "demo" : "none");
   const chooseModel = (...args) => activeBackend() === "gateway" ? null : pool.choose(...args);
-  const brand = () => ({name:setupVault.name,icon:"/icons/cloud-agent-v1-192.png"});
+  const requestOrigins=createOriginPolicy({origin,appOrigin:env.COMMUNITY_APP_ORIGIN || "",production:env.NODE_ENV==="production",boundOrigin:()=>boundOrigin});
+  const brand = () => ({name:setupVault.name,icon:"/icons/cloud-agent-v1-192.png",appOrigin:requestOrigins.appOrigin});
   const setupView = () => setupVault.view({configured,activeBackend:activeBackend(),subscriptions:SUBSCRIPTION_CONNECTIONS});
   const push = createPushService({ db, env, getName:()=>setupVault.name, sendImpl: options.pushSendImpl });
   const desktops = parseDesktops(env.COMMUNITY_DESKTOP_MAP,{sharedRoomId:env.COMMUNITY_SHARED_DESKTOP_ROOM,multiView:env.COMMUNITY_DESKTOP_VIEWS==="1"});
@@ -283,12 +285,18 @@ export async function startCommunity(options = {}) {
         .get(hash(raw), Date.now()) ?? null
     );
   }
+  const PROFILE_COLORS = new Set(["#6f658e", "#b55781", "#427f80", "#5479ad", "#9b7546", "#737373"]);
+  const profileColor = userId => {
+    const saved = db.prepare("SELECT value FROM settings WHERE key=?").get("profile-color:" + userId)?.value;
+    return PROFILE_COLORS.has(saved) ? saved : "#6f658e";
+  };
   const sessionShape = (user) => ({
     user: user
       ? {
           id: user.id,
           username: user.username,
           displayName: user.displayName,
+          avatarColor: profileColor(user.id),
           role: user.role,
         }
       : null,
@@ -347,10 +355,33 @@ export async function startCommunity(options = {}) {
       description: room.description,
       personal: isPersonalRoom(room) || isMailRoom(room),
       role: room.member_role,
+      sharing: {
+        mode: isPersonalRoom(room) || isMailRoom(room) ? "private" : "shared",
+        canInvite: room.id !== MONITOR_ROOM && room.member_role === "owner" && !isPersonalRoom(room) && !isMailRoom(room),
+        canCreateSharedCopy: room.id !== MONITOR_ROOM && room.member_role === "owner" && (isPersonalRoom(room) || isMailRoom(room)),
+      },
       memberCount: db
         .prepare("SELECT count(*) n FROM room_members WHERE room_id=?")
         .get(room.id).n,
     };
+  }
+  function copyTranscript(sourceId, destinationId, userId, cutoff = Number.MAX_SAFE_INTEGER) {
+    const saved = savedContext(sourceId);
+    // A summary may mention messages after a historical fork point. Keep the
+    // raw transcript instead when its cutoff exceeds the selected message.
+    const summary = Number(saved.through || 0) <= cutoff ? saved : {};
+    let through = 0;
+    for (const message of db.prepare("SELECT rowid,* FROM messages WHERE room_id=? AND rowid<=? ORDER BY created_at,rowid").all(sourceId, cutoff)) {
+      const messageId = randomUUID();
+      const result = db.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)").run(messageId, destinationId, message.kind, message.author_id, message.author, message.text, null, message.created_at);
+      if (message.rowid <= (summary.through || 0)) through = Number(result.lastInsertRowid);
+      for (const attachment of db.prepare("SELECT a.* FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=?").all(message.id)) {
+        const attachmentId = randomUUID();
+        db.prepare("INSERT INTO attachments VALUES(?,?,?,?,?,?,?,?,?,?)").run(attachmentId, destinationId, userId, attachment.name, attachment.mime, attachment.kind, attachment.size, attachment.path, attachment.created_at, attachment.bound_at);
+        db.prepare("INSERT INTO message_attachments VALUES(?,?)").run(messageId, attachmentId);
+      }
+    }
+    if (summary.summary || through) db.prepare("INSERT INTO settings VALUES(?,?)").run("context:" + destinationId, JSON.stringify({summary: summary.summary || "", through}));
   }
   async function nameSession(room,user,content) {
     try {
@@ -639,11 +670,14 @@ export async function startCommunity(options = {}) {
     );
     try {
       if (closing) throw failure(503, "서버를 재시작하고 있습니다.");
-      const expected = origin || boundOrigin;
-      if (req.headers.origin && req.headers.origin !== expected)
-        throw failure(403, "허용되지 않은 출처입니다.");
       const url = new URL(req.url, "http://local");
       const method = req.method;
+      const localHealth = method === "GET" && url.pathname === "/api/health" && !req.headers.origin &&
+        req.headers["sec-fetch-site"] !== "cross-site" && /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(req.headers.host || "");
+      const expected = requestOrigins.forRequest(req);
+      if (!expected && !localHealth) throw failure(403, "허용되지 않은 주소입니다.");
+      if (req.headers.origin && req.headers.origin !== expected)
+        throw failure(403, "허용되지 않은 출처입니다.");
       // Invitation links from webmail may navigate to the public app shell.
       // API calls, frames and subresources retain the cross-site restriction.
       const publicNavigation = ["GET", "HEAD"].includes(method) &&
@@ -663,14 +697,28 @@ export async function startCommunity(options = {}) {
           "/message-format.mjs": ["message-format.mjs", "text/javascript"],
           "/model-picker.mjs": ["model-picker.mjs", "text/javascript"],
           "/app.js": ["app.js", "text/javascript"],
+          "/conversation-ui.mjs": ["conversation-ui.mjs", "text/javascript"],
+          "/workspace-windows.js": ["workspace-windows.js", "text/javascript"],
           "/agent-presence.js": ["agent-presence.js", "text/javascript"],
           "/agent-presence.css": ["agent-presence.css", "text/css"],
           "/notification-center.js": ["notification-center.js", "text/javascript"],
           "/notification-center.css": ["notification-center.css", "text/css"],
           "/invite-links.mjs": ["invite-links.mjs", "text/javascript"],
+          "/profile-settings.js": ["profile-settings.js", "text/javascript"],
+          "/profile-settings.css": ["profile-settings.css", "text/css"],
+          "/room-sharing.js": ["room-sharing.js", "text/javascript"],
+          "/room-sharing.css": ["room-sharing.css", "text/css"],
+          "/media/agent/idle.webp": ["media/agent/idle.webp", "image/webp"],
+          "/media/agent/idle-poster.webp": ["media/agent/idle-poster.webp", "image/webp"],
           "/media/agent/idle.mp4": ["media/agent/idle.mp4", "video/mp4"],
+          "/media/agent/working.webp": ["media/agent/working.webp", "image/webp"],
+          "/media/agent/working-poster.webp": ["media/agent/working-poster.webp", "image/webp"],
           "/media/agent/working.mp4": ["media/agent/working.mp4", "video/mp4"],
+          "/media/agent/waiting.webp": ["media/agent/waiting.webp", "image/webp"],
+          "/media/agent/waiting-poster.webp": ["media/agent/waiting-poster.webp", "image/webp"],
           "/media/agent/waiting.mp4": ["media/agent/waiting.mp4", "video/mp4"],
+          "/media/agent/error.webp": ["media/agent/error.webp", "image/webp"],
+          "/media/agent/error-poster.webp": ["media/agent/error-poster.webp", "image/webp"],
           "/media/agent/error.mp4": ["media/agent/error.mp4", "video/mp4"],
           "/media/agent/idle-poster.jpg": ["media/agent/idle-poster.jpg", "image/jpeg"],
           "/setup-guide": ["../scripts/README.md", "text/plain"],
@@ -853,6 +901,16 @@ export async function startCommunity(options = {}) {
           return { id, username, displayName, role };
         });
         return issueSession(account, res, 201);
+      }
+      if (url.pathname === "/api/profile" && method === "POST") {
+        const displayName = text(body.displayName, 80, true);
+        const avatarColor = body.avatarColor ?? profileColor(user.id);
+        if (!PROFILE_COLORS.has(avatarColor)) throw failure(400, "프로필 색상을 다시 선택해 주세요.");
+        transaction(() => {
+          db.prepare("UPDATE users SET display_name=? WHERE id=?").run(displayName, user.id);
+          db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("profile-color:" + user.id, avatarColor);
+        });
+        return reply(res, 200, {user: sessionShape({...user, displayName}).user});
       }
       if (url.pathname === "/api/admin/setup" || url.pathname.startsWith("/api/admin/setup/")) {
         if (user.role !== "admin") throw failure(403,"관리자 전용입니다.");
@@ -1083,7 +1141,7 @@ export async function startCommunity(options = {}) {
         let accepted;
         try { accepted = await push.sendTest(row); } catch { throw failure(502, "푸시 알림을 전송하지 못했습니다."); }
         if (!accepted) throw failure(410, "알림 구독이 만료되었습니다. 알림을 다시 켜주세요.");
-        return reply(res, 202, { accepted: true });
+        return reply(res, 202, accepted());
       }
       if (url.pathname === "/api/admin/invites" && method === "POST") {
         if (user.role !== "admin")
@@ -1197,7 +1255,7 @@ export async function startCommunity(options = {}) {
         return reply(res, 200, { room: roomView(room) });
       }
       const match = url.pathname.match(
-        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|compact|progress|context-reset|usage))?$/,
+        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|shared-copy|compact|progress|context-reset|usage))?$/,
       );
       if (!match) throw failure(404, "찾을 수 없습니다.");
       const room = roomFor(match[1], user);
@@ -1236,6 +1294,13 @@ export async function startCommunity(options = {}) {
       if (match[2] === "fork" && method === "POST") {
         if(room.id===MONITOR_ROOM) throw failure(400,"대시보드는 Fork할 수 없습니다.");
         if(roomJobs.has(room.id)) throw failure(409,"응답이 끝난 뒤 Fork해주세요.");
+        let cutoff = Number.MAX_SAFE_INTEGER;
+        if (Object.hasOwn(body, "throughMessageId")) {
+          const messageId = text(body.throughMessageId, 36, true);
+          const message = db.prepare("SELECT rowid FROM messages WHERE id=? AND room_id=?").get(messageId, room.id);
+          if (!message) throw failure(400, "분기할 메시지를 이 대화에서 다시 선택해 주세요.");
+          cutoff = message.rowid;
+        }
         const fork=transaction(()=>{
           if(db.prepare("SELECT count(*) n FROM rooms WHERE owner_id=?").get(user.id).n>=20) throw failure(409,"세션은 최대 20개까지 만들 수 있습니다.");
           const id=randomUUID();
@@ -1243,22 +1308,26 @@ export async function startCommunity(options = {}) {
           db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(id,user.id,"owner");
           if(isPersonalRoom(room)) db.prepare("INSERT INTO settings VALUES(?,?)").run("private-fork:"+id,"1");
           if(isMailRoom(room)) db.prepare("INSERT INTO settings VALUES(?,?)").run("mail-room:"+id,"1");
-          const summary=JSON.parse(db.prepare("SELECT value FROM settings WHERE key=?").get("context:"+room.id)?.value || "{}");
-          let through=0;
-          for(const m of db.prepare("SELECT rowid,* FROM messages WHERE room_id=? ORDER BY created_at,rowid").all(room.id)) {
-            const mid=randomUUID();
-            const result=db.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)").run(mid,id,m.kind,m.author_id,m.author,m.text,null,m.created_at);
-            if(m.rowid<= (summary.through||0)) through=Number(result.lastInsertRowid);
-            for(const attachment of db.prepare("SELECT a.* FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=?").all(m.id)) {
-              const aid=randomUUID();
-              db.prepare("INSERT INTO attachments VALUES(?,?,?,?,?,?,?,?,?,?)").run(aid,id,user.id,attachment.name,attachment.mime,attachment.kind,attachment.size,attachment.path,attachment.created_at,attachment.bound_at);
-              db.prepare("INSERT INTO message_attachments VALUES(?,?)").run(mid,aid);
-            }
-          }
-          if(summary.summary || through) db.prepare("INSERT INTO settings VALUES(?,?)").run("context:"+id,JSON.stringify({summary:summary.summary || "",through}));
+          copyTranscript(room.id, id, user.id, cutoff);
           return roomFor(id,user);
         });
         return reply(res,201,{room:roomView(fork)});
+      }
+      if (match[2] === "shared-copy" && method === "POST") {
+        if (room.id === MONITOR_ROOM || room.member_role !== "owner") throw failure(403, "대화 소유자만 공유용 사본을 만들 수 있습니다.");
+        if (!isPersonalRoom(room) && !isMailRoom(room)) throw failure(400, "이 대화는 초대 링크로 바로 공유할 수 있습니다.");
+        if (body.confirmed !== true || typeof body.includeHistory !== "boolean") throw failure(400, "공유할 대화 내용의 범위를 확인해 주세요.");
+        if (roomJobs.has(room.id)) throw failure(409, "응답이 끝난 뒤 공유용 사본을 만들어 주세요.");
+        const name = text(body.name || room.name.slice(0, 65) + " · 함께 대화", 80, true);
+        const shared = transaction(() => {
+          if (db.prepare("SELECT count(*) n FROM rooms WHERE owner_id=?").get(user.id).n >= 20) throw failure(409, "세션은 최대 20개까지 만들 수 있습니다.");
+          const id = randomUUID();
+          db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(id, name, "함께 대화하는 세션", user.id, Date.now());
+          db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(id, user.id, "owner");
+          if (body.includeHistory) copyTranscript(room.id, id, user.id);
+          return roomFor(id, user);
+        });
+        return reply(res, 201, {room: roomView(shared)});
       }
       if (match[2] === "compact" && method === "POST") {
         if(room.id===MONITOR_ROOM) throw failure(400,"대시보드는 압축할 수 없습니다.");
@@ -1292,10 +1361,13 @@ export async function startCommunity(options = {}) {
       if (!match[2] && method === "GET") {
         const messages = db
             .prepare(
-              "SELECT id,kind,author_id authorId,author,text,created_at createdAt FROM messages WHERE room_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100",
+              "SELECT id,kind,author_id authorId,author,text,client_nonce clientNonceHash,created_at createdAt FROM messages WHERE room_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100",
             )
             .all(room.id).reverse();
-        for (const message of messages) message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id);
+        for (const message of messages) {
+          if (message.kind !== "human" || message.authorId !== user.id || !message.clientNonceHash) delete message.clientNonceHash;
+          message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id);
+        }
         return reply(res, 200, {
           room: roomView(room),
           members: db
@@ -1312,8 +1384,8 @@ export async function startCommunity(options = {}) {
       if (match[2] === "invites" && method === "POST") {
         if (isPersonalRoom(room) || isMailRoom(room)) throw failure(403,"개인 대화는 초대할 수 없습니다.");
         if (room.id === MONITOR_ROOM) throw failure(403, "모니터링 방은 관리자 전용입니다.");
-        if (room.member_role !== "owner" && user.role !== "admin")
-          throw failure(403, "방장만 방 초대를 만들 수 있습니다.");
+        if (room.member_role !== "owner")
+          throw failure(403, "대화 소유자만 초대 링크를 만들 수 있습니다.");
         limit("invite:" + user.id, 20);
         const raw = token(),
           expiresAt = Date.now() + 86400000;
@@ -1342,6 +1414,7 @@ export async function startCommunity(options = {}) {
           throw failure(400, "응답할 봇을 다시 선택해 주세요.");
         const selected = [...new Set(body.botIds ?? [])];
         const scopedNonce = hash(user.id + ":" + nonce);
+        const accepted = () => ({accepted: true, messageId: db.prepare("SELECT id FROM messages WHERE room_id=? AND client_nonce=?").get(room.id, scopedNonce)?.id});
         if (
           db
             .prepare(
@@ -1349,7 +1422,7 @@ export async function startCommunity(options = {}) {
             )
             .get(room.id, scopedNonce)
         )
-          return reply(res, 202, { accepted: true });
+          return reply(res, 202, accepted());
         if (!attachmentIds.length && content.toLowerCase() === "model") {
           limit("models:" + user.id, 8);
           const listed = activeBackend() === "gateway" ? {models:[],failures:[]} : await pool.listModels();
@@ -1357,7 +1430,7 @@ export async function startCommunity(options = {}) {
             insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, []);
             insertMessage(room.id, "bot", "모델", activeBackend() === "gateway" ? "Gateway에서 선택한 모델을 사용합니다. 구독 로그인과 모델 설정은 Gateway에서 관리합니다." : formatModelList(listed));
           });
-          return reply(res, 202, { accepted: true, models: publicModels(listed) });
+          return reply(res, 202, { ...accepted(), models: publicModels(listed) });
         }
         if (room.id === MONITOR_ROOM) {
           if (attachmentIds.length) throw failure(400, "모니터링 방에는 파일을 첨부하지 않습니다.");
@@ -1367,7 +1440,7 @@ export async function startCommunity(options = {}) {
             insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, []);
             insertMessage(room.id, "bot", "서버 모니터", report);
           });
-          return reply(res, 202, { accepted: true });
+          return reply(res, 202, accepted());
         }
         let choice = null;
         if (selected.length) {
@@ -1402,7 +1475,7 @@ export async function startCommunity(options = {}) {
           jobs.add(job);
           void job.finally(() => jobs.delete(job)).catch(() => {});
         }
-        return reply(res, 202, { accepted: true });
+        return reply(res, 202, accepted());
       }
       throw failure(404, "찾을 수 없습니다.");
     } catch (e) {
@@ -1413,8 +1486,8 @@ export async function startCommunity(options = {}) {
       });
     }
   });
-  desktopHub=createDesktopHub({server,desktops,userFor,roomFor,touch:room=>provisioner.touch(desktops.sharedRoomId || room),originFor:()=>origin||boundOrigin});
-  workspaceHub=createWorkspaceHub({server,desktops,userFor,roomFor,touch:room=>provisioner.touch(desktops.sharedRoomId || room),originFor:()=>origin||boundOrigin,fetchImpl:options.workspaceFetch});
+  desktopHub=createDesktopHub({server,desktops,userFor,roomFor,touch:room=>provisioner.touch(desktops.sharedRoomId || room),originFor:req=>requestOrigins.forRequest(req)});
+  workspaceHub=createWorkspaceHub({server,desktops,userFor,roomFor,touch:room=>provisioner.touch(desktops.sharedRoomId || room),originFor:req=>requestOrigins.forRequest(req),fetchImpl:options.workspaceFetch});
   server.requestTimeout = 30000;
   server.headersTimeout = 10000;
   await new Promise((done, reject) => {

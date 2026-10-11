@@ -25,8 +25,14 @@ def verify(origin, expected):
         raise RuntimeError('Installed app name does not match the configured brand')
     for path in ['/', '/app.js', '/agent-presence.js', '/agent-presence.css',
                  '/notification-center.js', '/notification-center.css', '/invite-links.mjs',
+                 '/profile-settings.js', '/profile-settings.css', '/room-sharing.js', '/room-sharing.css',
+                 '/conversation-ui.mjs', '/workspace-windows.js',
                  '/media/agent/idle.mp4', '/media/agent/working.mp4',
                  '/media/agent/waiting.mp4', '/media/agent/error.mp4', '/media/agent/idle-poster.jpg',
+                 '/media/agent/idle.webp', '/media/agent/idle-poster.webp',
+                 '/media/agent/working.webp', '/media/agent/working-poster.webp',
+                 '/media/agent/waiting.webp', '/media/agent/waiting-poster.webp',
+                 '/media/agent/error.webp', '/media/agent/error-poster.webp',
                  '/setup.js', '/setup.css', '/setup-guide', '/desktop.js', '/manifest.webmanifest',
                  '/sw.js', '/icons/cloud-agent-v1-192.png', '/icons/cloud-agent-v1-maskable-512.png']:
         with urllib.request.urlopen(origin + path, timeout=30) as response:

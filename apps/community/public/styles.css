@@ -1465,3 +1465,27 @@ button:active .agent-art { transform:scale(.94); }
 @media(max-width:420px) { .topbar .header-identity { position:absolute; left:12px; top:78px; max-width:calc(50% - 62px); } .topbar .header-identity h1 { font-size:10px; } .topbar .members-button { display:none; } .topbar .demo-badge { display:none; } }
 
 #register-token[hidden],#register-token-label[hidden],#join-token[hidden],#join-token-label[hidden] { display:none; }
+
+/* Character, message actions and per-message branching. */
+.topbar { grid-template-columns:minmax(0,1fr) 150px minmax(0,1fr); min-height:164px; height:164px; }
+.profile-customize { display:flex; align-items:center; gap:12px; min-width:0; flex:1; padding:7px 4px; border:0; border-radius:12px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.profile-customize:hover,.profile-customize:focus-visible { background:#ffffff0a; }
+.profile-customize .profile-copy { min-width:0; }
+.message-actions { display:flex; align-items:center; gap:4px; margin-top:8px; opacity:0; transition:opacity 140ms ease; }
+.message:hover .message-actions,.message:focus-within .message-actions { opacity:1; }
+.message-actions button { display:grid; place-items:center; width:34px; height:34px; border:0; border-radius:8px; color:#a8abb3; background:transparent; cursor:pointer; }
+.message-actions button:hover,.message-actions button:focus-visible { color:#e6dcff; background:#ad90ff18; }
+.message-actions .icon { width:24px; height:24px; }
+.message-actions button:disabled { opacity:.4; cursor:wait; }
+.message-own .message-actions { justify-content:flex-end; }
+.message-send-error { color:#eea8b1; font-size:12px; }
+.context-controls .context-ring { width:27px; height:27px; }
+.context-controls .context-trigger { gap:8px; padding:5px 8px; }
+.context-compact-button { width:100%; padding:10px 14px; margin-top:14px; border:1px solid #b7a0ed44; border-radius:10px; background:#b7a0ed18; color:#e4d9fc; font-size:12px; }
+.context-compact-button:disabled { opacity:.4; cursor:default; }
+.context-popover progress { height:12px; border-radius:8px; }
+.context-scale { display:flex; justify-content:space-between; color:#9095a0; font-variant-numeric:tabular-nums; margin-top:5px; font-size:10px; }
+@media(hover:none) { .message-actions { opacity:1; } }
+@media(max-width:720px) { .topbar { grid-template-columns:minmax(0,1fr) 135px minmax(0,1fr); min-height:149px; height:149px; } }
+@media(max-width:420px) { .topbar .header-identity { top:115px; } }
+@media(prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
