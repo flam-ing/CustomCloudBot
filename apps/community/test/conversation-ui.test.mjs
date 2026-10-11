@@ -46,3 +46,21 @@ test('quoted errors, explanations, successful fixes, and previous turns do not c
   const result = failedOutcome([human('old'), reply('할 수 없습니다.'), human('new')]);
   assert.deepEqual(result, {humanId: 'new', failed: false, messageId: null});
 });
+
+
+test('unavailable OCR capability is a persistent failed outcome without classifying quoted or resolved notices', () => {
+  const refusal = '죄송하지만, 현재 이 방에서는 사진의 OCR을 읽는 기능이 제공되지 않습니다.';
+  assert.deepEqual(failedOutcome([human(), reply(refusal)]), {humanId: 'turn', failed: true, messageId: 'reply'});
+  for (const text of [
+    '현재 OCR 기능이 제공되어 있지 않습니다.',
+    '이 환경에서는 OCR 기능이 지원되지 않아요.',
+  ]) assert.equal(failedOutcome([human(), reply(text)]).failed, true, text);
+  for (const text of [
+    '“OCR 기능이 제공되지 않습니다” 안내는 해결했습니다.',
+    '현재 표시되는 \"OCR 기능이 제공되지 않습니다\" 문구의 의미를 설명할게요.',
+    'OCR 설정을 해제하면 기능이 제공되지 않습니다.',
+    'OCR 기능이 제공되지 않습니다라는 오류는 수정했습니다.',
+    'OCR 설정을 복구했습니다. 기능이 정상 제공됩니다.',
+  ]) assert.equal(failedOutcome([human(), reply(text)]).failed, false, text);
+  assert.deepEqual(failedOutcome([human('prior'), reply(refusal), human('next')]), {humanId: 'next', failed: false, messageId: null});
+});

@@ -19,7 +19,7 @@ function isFailedReply(message) {
   const opening = openingReply(text);
   // A repaired error or a conditional example must not leave the agent red.
   if (/(?:해결|복구|수정|완료|성공)(?:했|됐|되었|하였습니다|했습니다)|(?:문구|오류 메시지).*(?:의미|뜻)|(?:경우|때에는|때는|다면|하면)/.test(opening)) return false;
-  return /(?:접근할 권한이|접근할 수|실행할 수|처리할 수|확인할 수|조회할 수|읽을 수|보낼 수|사용할 수|할 수)\s*(?:없습니다|없어요|없다)|지원하지 (?:않습니다|않아요)|완료하지 (?:못했습니다|못했어요)|불가능(?:합니다|해요)/.test(opening) ||
+  return /(?:접근할 권한이|접근할 수|실행할 수|처리할 수|확인할 수|조회할 수|읽을 수|보낼 수|사용할 수|할 수)\s*(?:없습니다|없어요|없다)|(?:제공|지원)(?:하지|되지|되어 있지)\s*(?:않습니다|않아요)|완료하지 (?:못했습니다|못했어요)|불가능(?:합니다|해요)/.test(opening) ||
     /^(?:I (?:cannot|can't|am unable to)|I(?:'m| am) unable to|Unfortunately,? I (?:cannot|can't))/i.test(opening);
 }
 export function failedOutcome(messages = []) {
