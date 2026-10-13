@@ -73,3 +73,18 @@ test('fork titles are based only on the first new message and not copied history
  assert.equal((await f.owner(`/api/rooms/${f.room.id}`)).room.name,'기존 대화');
  assert.equal(fresh.messages.filter(m=>m.text==='이번에는 여행 일정 정리').length,1);
 });
+
+
+test('existing unstarted forks gain titles without renaming branches already used',async t=>{
+ const f=await fixture(t);
+ await f.owner(`/api/rooms/${f.room.id}/messages`,{text:'복사할 기존 맥락',clientNonce:'source',botIds:[]});
+ const child=(await f.owner(`/api/rooms/${f.room.id}/fork`,{})).room;
+ f.app.db.prepare('DELETE FROM settings WHERE key=?').run('pending-title:'+child.id);
+ assert.equal((await f.owner(`/api/rooms/${child.id}`)).room.pendingTitle,true);
+ await f.owner(`/api/rooms/${child.id}/messages`,{text:'이미 만든 가지의 첫 새 질문',clientNonce:'first-own',botIds:[]});
+ assert.equal((await f.owner(`/api/rooms/${child.id}`)).room.name,'가지의 새 주제');
+ f.app.db.prepare('UPDATE rooms SET name=? WHERE id=?').run('사용 중인 가지 · Fork',child.id);
+ assert.equal((await f.owner(`/api/rooms/${child.id}`)).room.pendingTitle,false);
+ await f.owner(`/api/rooms/${child.id}/messages`,{text:'계속 이어가기',clientNonce:'next-own',botIds:[]});
+ assert.equal((await f.owner(`/api/rooms/${child.id}`)).room.name,'사용 중인 가지 · Fork');
+});

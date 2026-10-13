@@ -353,13 +353,20 @@ export async function startCommunity(options = {}) {
     if (isPersonalRoom(room) && (user.role !== "admin" || room.owner_id !== user.id)) throw failure(404, "방을 찾을 수 없습니다.");
     return room;
   }
+  function pendingRoomTitle(room) {
+    if(db.prepare("SELECT 1 FROM settings WHERE key=?").get("pending-title:"+room.id))return true;
+    // Branches made before automatic fork titles still await their first own message.
+    if(!room.name.endsWith(" · Fork"))return false;
+    const lineage=JSON.parse(db.prepare("SELECT value FROM settings WHERE key=?").get("lineage:"+room.id)?.value || "{}");
+    return lineage.operation==="fork" && !db.prepare("SELECT 1 FROM messages m LEFT JOIN message_origins o ON o.message_id=m.id WHERE m.room_id=? AND m.kind='human' AND o.message_id IS NULL LIMIT 1").get(room.id);
+  }
   function roomView(room) {
     return {
       id: room.id,
       name: room.name,
       description: room.description,
       createdAt: room.created_at,
-      pendingTitle: Boolean(db.prepare("SELECT 1 FROM settings WHERE key=?").get("pending-title:"+room.id)),
+      pendingTitle: pendingRoomTitle(room),
       personal: isPersonalRoom(room) || isMailRoom(room),
       role: room.member_role,
       sharing: {
@@ -778,9 +785,10 @@ export async function startCommunity(options = {}) {
     let needsTitle = false;
     transaction(() => {
       reserve(user.id, Math.max(1, selected.length));
+      const awaitingForkTitle=pendingRoomTitle(room);
       insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, [...new Set(attachmentIds)]);
       const currentName=db.prepare("SELECT name FROM rooms WHERE id=?").get(room.id)?.name;
-      needsTitle=Boolean(content.trim() && (currentName==="새 대화" || db.prepare("SELECT 1 FROM settings WHERE key=?").get("pending-title:"+room.id)));
+      needsTitle=Boolean(content.trim() && (currentName==="새 대화" || awaitingForkTitle));
       if(needsTitle) {
         db.prepare("UPDATE rooms SET name=? WHERE id=?").run(content.replace(/\s+/g," ").trim().slice(0,36),room.id);
         db.prepare("DELETE FROM settings WHERE key=?").run("pending-title:"+room.id);
