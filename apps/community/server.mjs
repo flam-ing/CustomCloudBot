@@ -21,6 +21,7 @@ import { createSetupVault } from "./setup-vault.mjs";
 import { serviceIdentity } from "./identity.mjs";
 import { createMailbox } from "./mailbox.mjs";
 import { createMailAgent } from "./mail-agent.mjs";
+import { createRoutines } from "./routines.mjs";
 import { verifyMail } from "./mail-auth.mjs";
 import { SUBSCRIPTION_CONNECTIONS } from "./subscription-connections.mjs";
 import { createSidebarStore } from "./sidebar.mjs";
@@ -212,6 +213,7 @@ export async function startCommunity(options = {}) {
   }
 
   const jobs = new Set();
+  const titleJobs = new Set();
   const controllers = new Set();
   let closing = false;
   let boundOrigin = "";
@@ -357,6 +359,7 @@ export async function startCommunity(options = {}) {
       name: room.name,
       description: room.description,
       createdAt: room.created_at,
+      pendingTitle: Boolean(db.prepare("SELECT 1 FROM settings WHERE key=?").get("pending-title:"+room.id)),
       personal: isPersonalRoom(room) || isMailRoom(room),
       role: room.member_role,
       sharing: {
@@ -709,6 +712,93 @@ export async function startCommunity(options = {}) {
     }
   }
 
+  async function submitRoomMessage(room, user, body, signal) {
+    if(closing || signal?.aborted) throw failure(503,"서버를 재시작하고 있습니다.");
+    const attachmentIds = body.attachmentIds ?? [];
+    if (!Array.isArray(attachmentIds) || attachmentIds.length > 4 || attachmentIds.some((id) => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))) throw failure(400, "첨부 파일을 다시 선택해 주세요.");
+    const content = attachmentIds.length ? text(body.text ?? "", 4000) : text(body.text, 4000, true),
+      nonce = text(body.clientNonce ?? "", 100, true);
+    const modelChoice = text(typeof body.model === "string" ? body.model : "", 200);
+    const effortChoice = text(typeof body.effort === "string" ? body.effort : "", 16);
+    if (modelChoice && !/^[\w.:/@+-]{1,200}$/.test(modelChoice)) throw failure(400, "모델을 다시 선택해 주세요.");
+    if (effortChoice && !EFFORTS.includes(effortChoice)) throw failure(400, "effort를 다시 선택해 주세요.");
+    if (
+      !Array.isArray(body.botIds ?? []) ||
+      (body.botIds ?? []).length > 3 ||
+      (body.botIds ?? []).some((id) => !BOTS.some((bot) => bot.id === id))
+    )
+      throw failure(400, "응답할 봇을 다시 선택해 주세요.");
+    const selected = [...new Set(body.botIds ?? [])];
+    const scopedNonce = hash(user.id + ":" + nonce);
+    const accepted = () => ({accepted: true, messageId: db.prepare("SELECT id FROM messages WHERE room_id=? AND client_nonce=?").get(room.id, scopedNonce)?.id});
+    if (
+      db
+        .prepare(
+          "SELECT 1 FROM messages WHERE room_id=? AND client_nonce=?",
+        )
+        .get(room.id, scopedNonce)
+    )
+      return accepted();
+    if (!attachmentIds.length && content.toLowerCase() === "model") {
+      limit("models:" + user.id, 8);
+      const listed = activeBackend() === "gateway" ? {models:[],failures:[]} : await pool.listModels();
+      transaction(() => {
+        insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, []);
+        insertMessage(room.id, "bot", "모델", activeBackend() === "gateway" ? "Gateway에서 선택한 모델을 사용합니다. 구독 로그인과 모델 설정은 Gateway에서 관리합니다." : formatModelList(listed));
+      });
+      return { ...accepted(), models: publicModels(listed) };
+    }
+    if (room.id === MONITOR_ROOM) {
+      if (attachmentIds.length) throw failure(400, "모니터링 방에는 파일을 첨부하지 않습니다.");
+      limit("monitor:" + user.id, 10);
+      const report = explainMonitor(await readMonitor(env.COMMUNITY_MONITOR_PATH));
+      transaction(() => {
+        insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, []);
+        insertMessage(room.id, "bot", "서버 모니터", report);
+      });
+      return accepted();
+    }
+    let choice = null;
+    if (selected.length) {
+      if(activeBackend() !== "gateway") await pool.ensureModels?.();
+      choice = chooseModel(modelChoice, effortChoice);
+      if (modelChoice && !choice && activeBackend() !== "gateway")
+        throw failure(400, "모델 목록을 다시 불러오세요.");
+    }
+    if (selected.length && ((!llm && !choice?.apiKey) || (llm === directLlm && !choice?.apiKey)))
+      throw failure(
+        503,
+        "모델 연결이 필요합니다. 봇 선택을 해제하면 사람끼리 대화할 수 있습니다.",
+      );
+    if (selected.length && (jobs.size >= 2 || roomJobs.has(room.id)))
+      throw Object.assign(failure(429, "봇이 다른 답변을 작성 중입니다. 잠시 후 다시 시도해 주세요."), {safeToRetry:true});
+    if(closing || signal?.aborted) throw failure(503,"요청이 중지되었습니다.");
+    if(signal) routineOwner(user.id,room.id);
+    limit("message:" + user.id, 30);
+    let needsTitle = false;
+    transaction(() => {
+      reserve(user.id, Math.max(1, selected.length));
+      insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, [...new Set(attachmentIds)]);
+      const currentName=db.prepare("SELECT name FROM rooms WHERE id=?").get(room.id)?.name;
+      needsTitle=Boolean(content.trim() && (currentName==="새 대화" || db.prepare("SELECT 1 FROM settings WHERE key=?").get("pending-title:"+room.id)));
+      if(needsTitle) {
+        db.prepare("UPDATE rooms SET name=? WHERE id=?").run(content.replace(/\s+/g," ").trim().slice(0,36),room.id);
+        db.prepare("DELETE FROM settings WHERE key=?").run("pending-title:"+room.id);
+      }
+    });
+    if(needsTitle) { const titleJob=nameSession(room,user,content);titleJobs.add(titleJob);void titleJob.finally(()=>titleJobs.delete(titleJob)).catch(()=>{}); }
+    void push.notifyRoom(room.id, "human", user.id).catch(() => {});
+    if (selected.length) {
+      roomProgress.set(room.id,[]);
+      roomJobs.add(room.id);
+      reportProgress(room.id,"accepted","요청 접수됨");
+      const job = botRun(room, selected, user.id, choice, {signal});
+      jobs.add(job);
+      void job.finally(() => jobs.delete(job)).catch(() => {});
+    }
+    return accepted();
+  }
+
   async function runMailTask({userId,id,message,roomId,signal}) {
     const user=db.prepare("SELECT id,username,display_name AS displayName,role FROM users WHERE id=?").get(userId);
     if (!user) throw failure(403,"메일 사용자 연결을 확인해 주세요.");
@@ -744,6 +834,23 @@ export async function startCommunity(options = {}) {
   }
   const mailAgent=createMailAgent({db,mailbox,env,verifyMail:options.verifyMail ?? verifyMail,
     runTask:runMailTask,canRunTask:()=>!closing && configured && jobs.size<2});
+
+  function routineOwner(ownerId, roomId) {
+    const owner=db.prepare("SELECT id,username,display_name AS displayName,role FROM users WHERE id=?").get(ownerId);
+    if(!owner) throw failure(403,"루틴을 만든 계정을 확인해 주세요.");
+    const room=roomFor(roomId,owner);
+    if(room.id===MONITOR_ROOM || roomPreference(ownerId,roomId).archived) throw failure(403,"사용 중인 대화에서 루틴을 설정해 주세요.");
+    return {owner,room};
+  }
+  function validateRoutineModel(input) {
+    if(Object.hasOwn(input,"model") && (typeof input.model!=="string" || (input.model && !/^[\w.:/@+-]{1,200}$/.test(input.model)))) throw failure(400,"모델을 다시 선택해 주세요.");
+    if(Object.hasOwn(input,"effort") && (typeof input.effort!=="string" || (input.effort && !EFFORTS.includes(input.effort)))) throw failure(400,"effort를 다시 선택해 주세요.");
+    return input;
+  }
+  const routines=createRoutines({db,authorize:(ownerId,roomId)=>{routineOwner(ownerId,roomId);},dispatch:async({routine,occurrenceId,signal})=>{
+    const {owner,room}=routineOwner(routine.ownerId,routine.roomId);
+    return submitRoomMessage(room,owner,{text:routine.prompt,clientNonce:"routine:"+occurrenceId,model:routine.model,effort:routine.effort,botIds:[BOTS[0].id]},signal);
+  }});
 
   const server = createServer(async (req, res) => {
     res.setHeader("x-content-type-options", "nosniff");
@@ -788,6 +895,9 @@ export async function startCommunity(options = {}) {
           "/notification-center.js": ["notification-center.js", "text/javascript"],
           "/branch-graph.mjs": ["branch-graph.mjs", "text/javascript"],
           "/branch-graph.css": ["branch-graph.css", "text/css"],
+          "/routines.js": ["routines.js", "text/javascript"],
+          "/routines.css": ["routines.css", "text/css"],
+          "/topic-switch.mjs": ["topic-switch.mjs", "text/javascript"],
           "/notification-center.css": ["notification-center.css", "text/css"],
           "/invite-links.mjs": ["invite-links.mjs", "text/javascript"],
           "/profile-settings.js": ["profile-settings.js", "text/javascript"],
@@ -897,7 +1007,7 @@ export async function startCommunity(options = {}) {
       if (authenticating) limit("auth:" + req.socket.remoteAddress, 20);
       else if(!/^\/api\/rooms\/[a-f0-9-]{36}\/workspace(?:\/|$)/.test(url.pathname))limit("api:" + user.id, 180);
       const isAttachmentPost = method === "POST" && /^\/api\/rooms\/[a-f0-9-]{36}\/attachments$/.test(url.pathname);
-      const needsJsonBody = (method === "PUT" && url.pathname === "/api/sidebar") || (method === "POST" && !isAttachmentPost) || (method === "DELETE" && url.pathname === "/api/push/subscriptions");
+      const needsJsonBody = method === "PATCH" || (method === "PUT" && url.pathname === "/api/sidebar") || (method === "POST" && !isAttachmentPost) || (method === "DELETE" && url.pathname === "/api/push/subscriptions");
       const body = needsJsonBody ? await readBody(req, url.pathname === "/api/admin/mail/send" ? 65536 : MAX_BODY) : {};
       if (authenticating) {
         const username = text(body.username, 40, true).toLowerCase();
@@ -1342,11 +1452,22 @@ export async function startCommunity(options = {}) {
         });
         return reply(res, 200, { room: roomView(room) });
       }
+      const routineMatch=url.pathname.match(/^\/api\/routines\/([a-f0-9-]{36})(?:\/(run))?$/);
+      if(routineMatch) {
+        if(!routineMatch[2] && method==="PATCH") return reply(res,200,{routine:await routines.update(user.id,routineMatch[1],validateRoutineModel(body))});
+        if(!routineMatch[2] && method==="DELETE") {await routines.remove(user.id,routineMatch[1]);return reply(res,200,{ok:true});}
+        if(routineMatch[2]==="run" && method==="POST") return reply(res,202,await routines.runNow(user.id,routineMatch[1],{requestId:body.requestId}));
+        throw failure(404,"찾을 수 없습니다.");
+      }
       const match = url.pathname.match(
-        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage))?$/,
+        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage|routines))?$/,
       );
       if (!match) throw failure(404, "찾을 수 없습니다.");
       const room = roomFor(match[1], user);
+      if(match[2]==="routines") {
+        if(method==="GET") return reply(res,200,{routines:await routines.list(user.id,room.id)});
+        if(method==="POST") return reply(res,201,{routine:await routines.create(user.id,room.id,validateRoutineModel(body))});
+      }
       if (match[2] === "usage" && method === "GET") {
         return reply(res,200,modelUsage.snapshot(room.id,{includeProviders:user.role === "admin"}));
       }
@@ -1397,6 +1518,7 @@ export async function startCommunity(options = {}) {
           if(isPersonalRoom(room)) db.prepare("INSERT INTO settings VALUES(?,?)").run("private-fork:"+id,"1");
           if(isMailRoom(room)) db.prepare("INSERT INTO settings VALUES(?,?)").run("mail-room:"+id,"1");
           copyTranscript(room.id, id, user.id, cutoff);
+          db.prepare("INSERT INTO settings VALUES(?,?)").run("pending-title:"+id,"1");
           db.prepare("INSERT INTO settings VALUES(?,?)").run("lineage:"+id, JSON.stringify({ parent: room.id, parents: [room.id], operation: "fork", throughMessageId: Object.hasOwn(body, "throughMessageId") ? text(body.throughMessageId, 36, true) : null }));
           return roomFor(id,user);
         });
@@ -1532,84 +1654,7 @@ export async function startCommunity(options = {}) {
         return reply(res, 201, { token: raw, expiresAt });
       }
       if (match[2] === "messages" && method === "POST") {
-        const attachmentIds = body.attachmentIds ?? [];
-        if (!Array.isArray(attachmentIds) || attachmentIds.length > 4 || attachmentIds.some((id) => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))) throw failure(400, "첨부 파일을 다시 선택해 주세요.");
-        const content = attachmentIds.length ? text(body.text ?? "", 4000) : text(body.text, 4000, true),
-          nonce = text(body.clientNonce ?? "", 100, true);
-        const modelChoice = text(typeof body.model === "string" ? body.model : "", 200);
-        const effortChoice = text(typeof body.effort === "string" ? body.effort : "", 16);
-        if (modelChoice && !/^[\w.:/@+-]{1,200}$/.test(modelChoice)) throw failure(400, "모델을 다시 선택해 주세요.");
-        if (effortChoice && !EFFORTS.includes(effortChoice)) throw failure(400, "effort를 다시 선택해 주세요.");
-        if (
-          !Array.isArray(body.botIds ?? []) ||
-          (body.botIds ?? []).length > 3 ||
-          (body.botIds ?? []).some((id) => !BOTS.some((bot) => bot.id === id))
-        )
-          throw failure(400, "응답할 봇을 다시 선택해 주세요.");
-        const selected = [...new Set(body.botIds ?? [])];
-        const scopedNonce = hash(user.id + ":" + nonce);
-        const accepted = () => ({accepted: true, messageId: db.prepare("SELECT id FROM messages WHERE room_id=? AND client_nonce=?").get(room.id, scopedNonce)?.id});
-        if (
-          db
-            .prepare(
-              "SELECT 1 FROM messages WHERE room_id=? AND client_nonce=?",
-            )
-            .get(room.id, scopedNonce)
-        )
-          return reply(res, 202, accepted());
-        if (!attachmentIds.length && content.toLowerCase() === "model") {
-          limit("models:" + user.id, 8);
-          const listed = activeBackend() === "gateway" ? {models:[],failures:[]} : await pool.listModels();
-          transaction(() => {
-            insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, []);
-            insertMessage(room.id, "bot", "모델", activeBackend() === "gateway" ? "Gateway에서 선택한 모델을 사용합니다. 구독 로그인과 모델 설정은 Gateway에서 관리합니다." : formatModelList(listed));
-          });
-          return reply(res, 202, { ...accepted(), models: publicModels(listed) });
-        }
-        if (room.id === MONITOR_ROOM) {
-          if (attachmentIds.length) throw failure(400, "모니터링 방에는 파일을 첨부하지 않습니다.");
-          limit("monitor:" + user.id, 10);
-          const report = explainMonitor(await readMonitor(env.COMMUNITY_MONITOR_PATH));
-          transaction(() => {
-            insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, []);
-            insertMessage(room.id, "bot", "서버 모니터", report);
-          });
-          return reply(res, 202, accepted());
-        }
-        let choice = null;
-        if (selected.length) {
-          if(activeBackend() !== "gateway") await pool.ensureModels?.();
-          choice = chooseModel(modelChoice, effortChoice);
-          if (modelChoice && !choice && activeBackend() !== "gateway")
-            throw failure(400, "모델 목록을 다시 불러오세요.");
-        }
-        if (selected.length && ((!llm && !choice?.apiKey) || (llm === directLlm && !choice?.apiKey)))
-          throw failure(
-            503,
-            "모델 연결이 필요합니다. 봇 선택을 해제하면 사람끼리 대화할 수 있습니다.",
-          );
-        if (selected.length && (jobs.size >= 2 || roomJobs.has(room.id)))
-          throw failure(
-            429,
-            "봇이 다른 답변을 작성 중입니다. 잠시 후 다시 시도해 주세요.",
-          );
-        limit("message:" + user.id, 30);
-        transaction(() => {
-          reserve(user.id, Math.max(1, selected.length));
-          insertMessageWithAttachments(room.id, user.displayName, content, user.id, scopedNonce, [...new Set(attachmentIds)]);
-          if(room.name==="새 대화" && content.trim()) db.prepare("UPDATE rooms SET name=? WHERE id=?").run(content.replace(/\s+/g," ").trim().slice(0,36),room.id);
-        });
-        if(room.name==="새 대화" && content.trim()) { const titleJob=nameSession(room,user,content);jobs.add(titleJob);void titleJob.finally(()=>jobs.delete(titleJob)).catch(()=>{}); }
-        void push.notifyRoom(room.id, "human", user.id).catch(() => {});
-        if (selected.length) {
-          roomProgress.set(room.id,[]);
-          roomJobs.add(room.id);
-          reportProgress(room.id,"accepted","요청 접수됨");
-          const job = botRun(room, selected, user.id, choice);
-          jobs.add(job);
-          void job.finally(() => jobs.delete(job)).catch(() => {});
-        }
-        return reply(res, 202, accepted());
+        return reply(res, 202, await submitRoomMessage(room, user, body));
       }
       throw failure(404, "찾을 수 없습니다.");
     } catch (e) {
@@ -1635,11 +1680,13 @@ export async function startCommunity(options = {}) {
   boundOrigin =
     "http://" + (host === "::1" ? "[::1]" : host) + ":" + server.address().port;
   mailAgent.start();
+  routines.start();
   let closePromise;
   return {
     server,
     db,
     mailAgent,
+    routines,
     url: boundOrigin,
     close: () =>
       (closePromise ??= (async () => {
@@ -1649,6 +1696,7 @@ export async function startCommunity(options = {}) {
         await mediaCleanupPromise;
         for (const controller of controllers) controller.abort();
         await mailAgent.close();
+        await routines.close();
         for(const clients of progressClients.values())for(const client of [...clients])client.close();
         desktopHub.close();
         workspaceHub.close();
@@ -1656,7 +1704,7 @@ export async function startCommunity(options = {}) {
         await push.close();
         const stopped = new Promise((done) => server.close(done));
         server.closeIdleConnections();
-        await Promise.allSettled([...jobs]);
+        await Promise.allSettled([...jobs,...titleJobs]);
         await stopped;
         db.close();
       })()),

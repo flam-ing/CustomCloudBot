@@ -12,6 +12,8 @@ import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
 import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
+import { createRoutineUI } from "/routines.js";
+import { suggestTopicSwitch } from "/topic-switch.mjs";
 const inviteLinks = createInviteLinks();
 
 let dockRects = [{x:0,y:0,w:1,h:1}];
@@ -48,6 +50,8 @@ let agentPresence;
 let notificationUI;
 let profileUI;
 let sharingUI;
+let routineUI;
+const topicPrompts = new Set();
 const pendingMessages = new Map();
 const presenceTurns = new Map();
 const presenceErrors = new Set();
@@ -137,6 +141,13 @@ function renderAgentLinks() {
   let links=$("#agent-workspaces");
   if(!links){links=document.createElement("div");links.id="agent-workspaces";links.className="agent-workspaces";$(".branch-heading").before(links);}
   links.replaceChildren();
+  const routines=document.createElement("button");routines.type="button";routines.id="open-routines";routines.textContent="루틴";
+  routines.onclick=()=>{
+    const pane=state.focusPane>0?state.extra[state.focusPane-1]:null;
+    const id=pane?.roomId||state.selectedRoom,room=state.rooms.find(item=>item.id===id);
+    if(!room||id===MONITOR_ROOM||room.archived){toast("루틴을 실행할 대화를 먼저 선택해 주세요.");return;}
+    void routineUI?.open(room,{model:pane?.model??$("#model-select").value,effort:pane?.effort??$("#effort-select").value});
+  };links.append(routines);
   if(state.session?.user?.role==="admin") {
     const setup=document.createElement("button");setup.type="button";setup.textContent="내 봇 설정";setup.onclick=()=>void setupUI?.open();links.append(setup);
     const mail=document.createElement("button");mail.type="button";mail.append(icon("mail"));const mailLabel=document.createElement("span");mailLabel.textContent="메일";mail.append(mailLabel);mail.onclick=()=>void mailUI?.open();links.append(mail);
@@ -203,6 +214,7 @@ function showAuth() {
   profileUI?.close(); sharingUI?.close();
   setupUI?.reset();
   mailUI?.reset();
+  routineUI?.reset();topicPrompts.clear();document.querySelector(".topic-choice-dialog")?.close();
   closeContextPopover();
   resetSidebarState();
   modelChanges.clear();
@@ -601,6 +613,7 @@ async function selectRoom(id) {
     if (pane.roomId === id) pane.roomId = previous && previous !== id ? previous : null;
   });
   state.selectedRoom = id;
+  $("#message-input").disabled=state.sending;
   notificationUI?.markRoomRead(id);
   clearThinking(els.sendingStatus);
   const prefs = roomPreferences(id);
@@ -1265,7 +1278,54 @@ async function toggleRecording() {
   }, 120000);
   toast("녹음 중… 다시 눌러 녹음을 첨부합니다.");
 }
-async function submitMessage(event) {
+function topicChoiceDialog() {
+  return new Promise(resolve=>{
+    const dialog=sidebarDialog("다른 일을 시작하시나요?");dialog.classList.add("topic-choice-dialog");
+    const note=document.createElement("p");note.textContent="이전 내용을 이어서 가지치기할까요, 아예 새 대화로 시작할까요?";
+    const choices=document.createElement("div");choices.className="topic-choice-buttons";
+    let answer="cancel";
+    for(const [value,title,description] of [["fork","이전 내용 이어서","지금까지의 내용을 가지고 새 가지에서 시작해요."],["new","새로 시작","이전 내용 없이 빈 대화에서 시작해요."],["stay","여기서 계속","현재 대화에 그대로 보내요."]]) {
+      const button=document.createElement("button");button.type="button";
+      const label=document.createElement("strong"),detail=document.createElement("span");label.textContent=title;detail.textContent=description;button.append(label,detail);
+      button.onclick=()=>{answer=value;dialog.close();};choices.append(button);
+    }
+    const cancel=document.createElement("button");cancel.type="button";cancel.textContent="취소";cancel.onclick=()=>dialog.close();
+    dialog.append(note,choices,cancel);dialog.addEventListener("close",()=>resolve(answer),{once:true});dialog.showModal();choices.firstChild.focus();
+  });
+}
+// A conservative local suggestion keeps ordinary sends instant and never changes a room by itself.
+async function offerTopicChoice(pane,draft) {
+  const {roomId,data}=roomContextOwner(pane),userId=state.session?.user?.id;
+  if(!data || data.room?.pendingTitle || roomId===MONITOR_ROOM || !suggestTopicSwitch({history:data.messages,draft}).suggest)return false;
+  topicPrompts.add(roomId);
+  const model=pane?.model??$("#model-select").value,effort=pane?.effort??$("#effort-select").value;
+  const current=()=>contextOwnerCurrent(roomId,userId,pane);
+  const sourceInput=pane?$("textarea",$$(".extra-pane")[state.extra.indexOf(pane)]):$("#message-input");
+  let locked=false,lockedRoomId=roomId;
+  try {
+    const choice=await topicChoiceDialog();
+    if(!current()||choice==="cancel")return true;
+    if(choice==="stay")return false;
+    if(roomContextOwner(pane).busy){toast("답변이 끝난 뒤 다시 보내 주세요.");return true;}
+    sourceInput.disabled=true;locked=true;
+    const result=await api(choice==="fork"?`/api/rooms/${encodeURIComponent(roomId)}/fork`:"/api/rooms",{method:"POST",body:"{}"});
+    if(!current())return true;
+    saveRoomPreferences(result.room.id,{model,effort});
+    await loadRooms();if(!current())return true;
+    if(pane){
+      const index=state.extra.indexOf(pane);assignExtra(index,result.room.id);pane.model=model;pane.effort=effort;pane.draft=draft;
+      const form=$(".pane-composer",$$(".extra-pane")[index]);$("textarea",form).value=draft;
+      await submitPane({preventDefault(){},currentTarget:form},index,true);
+    }else{
+      lockedRoomId=result.room.id;
+      await selectRoom(result.room.id);if(!contextOwnerCurrent(result.room.id,userId))return true;
+      $("#message-input").value=draft;await submitMessage({preventDefault(){}},true);
+    }
+    return true;
+  }catch(error){if(current())toast(error.message);return true;}
+  finally{topicPrompts.delete(roomId);if(locked&&sourceInput.isConnected&&contextOwnerCurrent(lockedRoomId,userId,pane))sourceInput.disabled=false;}
+}
+async function submitMessage(event, skipTopic = false) {
   event.preventDefault();
   if (!state.selectedRoom || roomContextOwner().busy) return;
   const input = $("#message-input"),
@@ -1278,6 +1338,9 @@ async function submitMessage(event) {
     toast("첨부 파일 업로드가 끝날 때까지 기다려주세요.");
     return;
   }
+  if(topicPrompts.has(roomId))return;
+  if(!skipTopic && !attachments.length && await offerTopicChoice(null,text))return;
+  if(state.selectedRoom!==roomId || roomContextOwner().busy)return;
   const attachmentIds = attachments.map((item) => item.attachment.id);
   const signature = JSON.stringify({ roomId, text, botIds, attachmentIds });
   if (state.pendingSend?.signature !== signature)
@@ -1957,7 +2020,7 @@ function effortSelect(pane) {
   label.append(select);
   return label;
 }
-async function submitPane(event, index) {
+async function submitPane(event, index, skipTopic = false) {
   event.preventDefault();
   const pane = state.extra[index];
   if (!pane?.roomId || roomContextOwner(pane).busy) return;
@@ -1966,6 +2029,9 @@ async function submitPane(event, index) {
   const text = input.value.trim();
   if (!text) return;
   const roomId=pane.roomId,userId=state.session?.user?.id;
+  if(topicPrompts.has(roomId))return;
+  if(!skipTopic && await offerTopicChoice(pane,text))return;
+  if(!contextOwnerCurrent(roomId,userId,pane)||roomContextOwner(pane).busy)return;
   const signature=JSON.stringify({roomId,text,model:pane.model,effort:pane.effort});
   if(pane.pendingSend?.signature!==signature)pane.pendingSend={signature,nonce:crypto.randomUUID()};
   const nonce=pane.pendingSend.nonce;
@@ -1994,6 +2060,7 @@ async function submitPane(event, index) {
     pane.pendingSend=null;
     if (Array.isArray(result.models)) applyModels(result.models);
     await refreshExtra(index);
+    await loadRooms();
   } catch (error) {
     if(state.session?.user?.id!==userId)return;
     if(accepted){toast("메시지는 접수됐습니다. 대화를 다시 불러오고 있어요.");return;}
@@ -2042,6 +2109,8 @@ async function refreshExtra(index) {
     if (data.busy) list.append(thinkingRow(roomId));
     if (nearBottom) list.scrollTop = list.scrollHeight;
     $("h2", section).textContent = data.room?.name || "대화";
+    const listed=state.rooms.find(room=>room.id===roomId);
+    if(listed&&data.room?.name&&listed.name!==data.room.name){listed.name=data.room.name;renderRooms();}
   } catch (error) {
     if (pane.request !== request) return;
     if (error.status === 401) { state.session = null; showAuth(); }
@@ -2233,6 +2302,7 @@ notificationUI = createNotificationCenter({ mount: $("#notification-center"), op
 pwaUI = createPwaController({ api, getSession: () => state.session, toast });
 desktopUI = createDesktopUI({ api, getRoomId: () => state.selectedRoom, getRoomName: id => state.rooms.find(room=>room.id===id)?.name || "대화", toast });
 profileUI = createProfileSettings({api,getSession:()=>state.session,toast,onSaved: user=>{state.session.user=user;$("#profile-name").textContent=user.displayName;$("#profile-avatar").textContent=initials(user.displayName);$("#profile-avatar").style.backgroundColor=user.avatarColor || "";}});
+routineUI = createRoutineUI({api,getSession:()=>state.session,getRoom:()=>state.rooms.find(room=>room.id===currentBranchId()),toast,onChanged:async()=>{await refreshRoom(true);await loadRooms();refreshExtras();}});
 sharingUI = createRoomSharing({api,getSession:()=>state.session,toast,onRoomCreated:async room=>{await loadRooms();await selectRoom(room.id);},onInvite:room=>makeInvite(`/api/rooms/${encodeURIComponent(room.id)}/invites`,"room")});
 const workspaceButton = $(".topbar-actions .desktop-button");
 if (workspaceButton) {

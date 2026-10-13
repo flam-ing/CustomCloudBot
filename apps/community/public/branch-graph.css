@@ -37,3 +37,11 @@
 .branch-merge-preview { font-size:12px; line-height:1.7; color:#c4b3de; overflow-wrap:anywhere; margin:18px 0 0; }
 .branch-merge-dialog .sidebar-dialog-actions button[type="submit"] { background:#b7a0ed24; color:#e3d7f5; }
 @media(prefers-reduced-motion:reduce) { .branch-row { transition:none; } }
+
+.topic-choice-dialog { width: min(460px, calc(100vw - 32px)); }
+.topic-choice-dialog p { color: var(--text-secondary, #a5a5ac); line-height: 1.6; }
+.topic-choice-buttons { display: grid; gap: 10px; margin: 20px 0 16px; }
+.topic-choice-buttons button { display: grid; gap: 5px; padding: 15px 17px; text-align: left; border: 1px solid #393940; border-radius: 12px; background: #202024; transition: background .16s, border-color .16s; }
+.topic-choice-buttons button:hover, .topic-choice-buttons button:focus-visible { background: #2b2736; border-color: #b7a1df; }
+.topic-choice-buttons strong { font-size: 15px; }
+.topic-choice-buttons span { color: #aaa6b1; font-size: 13px; }
