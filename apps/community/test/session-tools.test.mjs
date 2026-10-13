@@ -23,5 +23,13 @@ test('automatic title, compact, fork preserve context and isolate membership',as
  const child=await admin(`/api/rooms/${fork.room.id}`);assert.equal(child.messages.length,before.messages.length);assert.equal(child.context.usedChars,compact.context.usedChars);assert.equal(child.members.length,1);
  assert.equal((await other(`/api/rooms/${fork.room.id}`)).status,404);
  assert.equal((await admin(`/api/rooms/${id}`)).messages.length,before.messages.length);
+ const rooms=await admin('/api/rooms');
+ assert.equal(rooms.forks.some(link=>link.id===fork.room.id&&link.parent===id),true);
+ await admin(`/api/rooms/${fork.room.id}/messages`,{text:'가지에서만 한 말',clientNonce:'branch',botIds:[]});
+ const merged=await admin(`/api/rooms/${id}/merge`,{sourceId:fork.room.id});
+ assert.equal(merged.status,201);
+ const mergedRoom=await admin(`/api/rooms/${merged.room.id}`);
+ assert.equal(mergedRoom.messages.some(message=>message.text==='가지에서만 한 말'),true);
+ assert.equal((await admin(`/api/rooms/${id}`)).messages.some(message=>message.text==='가지에서만 한 말'),false);
  }finally{await app.close();await rm(dir,{recursive:true,force:true});}
 });

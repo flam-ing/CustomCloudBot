@@ -27,6 +27,7 @@ def verify(origin, expected):
                  '/notification-center.js', '/notification-center.css', '/invite-links.mjs',
                  '/profile-settings.js', '/profile-settings.css', '/room-sharing.js', '/room-sharing.css',
                  '/conversation-ui.mjs', '/workspace-windows.js',
+                 '/branch-graph.mjs', '/branch-graph.css',
                  '/media/agent/idle.mp4', '/media/agent/working.mp4',
                  '/media/agent/waiting.mp4', '/media/agent/error.mp4', '/media/agent/idle-poster.jpg',
                  '/media/agent/idle.webp', '/media/agent/idle-poster.webp',

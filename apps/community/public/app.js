@@ -11,6 +11,7 @@ import { createInviteLink, createInviteLinks } from "/invite-links.mjs";
 import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
+import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
 const inviteLinks = createInviteLinks();
 
 let dockRects = [{x:0,y:0,w:1,h:1}];
@@ -18,6 +19,7 @@ let pendingDock = null;
 const state = {
   session: null,
   rooms: [],
+  forks: [],
   bots: [],
   selectedRoom: null,
   roomData: null,
@@ -49,6 +51,7 @@ let sharingUI;
 const pendingMessages = new Map();
 const presenceTurns = new Map();
 const presenceErrors = new Set();
+const branchOperations = new Set();
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const els = {
@@ -132,7 +135,7 @@ const toast = (message) => {
 const initials = (name) => (name || "?").trim().slice(0, 1).toUpperCase();
 function renderAgentLinks() {
   let links=$("#agent-workspaces");
-  if(!links){links=document.createElement("div");links.id="agent-workspaces";links.className="agent-workspaces";els.roomList.before(links);}
+  if(!links){links=document.createElement("div");links.id="agent-workspaces";links.className="agent-workspaces";$(".branch-heading").before(links);}
   links.replaceChildren();
   if(state.session?.user?.role==="admin") {
     const setup=document.createElement("button");setup.type="button";setup.textContent="내 봇 설정";setup.onclick=()=>void setupUI?.open();links.append(setup);
@@ -211,6 +214,8 @@ function showAuth() {
   state.selectedRoom = null;
   state.roomData = null;
   state.rooms = [];
+  state.forks = [];
+  branchOperations.clear();
   state.bots = [];
   state.selectedBots = [];
   state.botChoiceTouched = false;
@@ -305,6 +310,7 @@ async function loadRooms() {
     const data = await api("/api/rooms");
     if(userId!==state.session?.user?.id||epoch!==sidebarEpoch)return;
     state.rooms = data.rooms || [];
+    state.forks = data.forks || [];
     state.bots = data.bots || [];
     if (
       state.session?.model?.configured &&
@@ -317,25 +323,13 @@ async function loadRooms() {
     els.usage.title = data.usage ? `앱의 하루 호출 사용량 ${data.usage.used} / ${data.usage.limit}회 · 공급자 잔여량과 별개` : "";
     renderRooms();
     renderBotPicker();
-    if (!state.rooms.length) showEmpty();
-    else if (
-      !state.selectedRoom ||
-      !state.rooms.some((room) => room.id === state.selectedRoom)
-    ) {
+    const activeRooms = state.rooms.filter(room => !room.archived && room.id !== MONITOR_ROOM);
+    if (!state.rooms.some(room => room.id === state.selectedRoom && !room.archived)) {
+      if (!activeRooms.length) { showEmpty(); return; }
       let last;
-      try {
-        last = sessionStorage.getItem(
-          "community-room:" + state.session.user.id,
-        );
-      } catch {}
+      try { last = sessionStorage.getItem("community-room:" + userId); } catch {}
       const requested = new URLSearchParams(window.location.search).get("room");
-      await selectRoom(
-        state.rooms.some((room) => room.id === requested && !room.archived)
-          ? requested
-          : state.rooms.some((room) => room.id === last && !room.archived)
-            ? last
-            : (state.rooms.find(room=>!room.archived) || state.rooms[0]).id,
-      );
+      await selectRoom(activeRooms.find(room => room.id === requested)?.id || activeRooms.find(room => room.id === last)?.id || activeRooms[0].id);
     }
   } catch (error) {
     if(userId===state.session?.user?.id&&epoch===sidebarEpoch)toast(error.message);
@@ -517,38 +511,80 @@ function sidebarRoomButton(room) {
   const meta=document.createElement("small");meta.textContent=`${room.memberCount||0}명 · ${room.description||"공동 대화"}`;
   copy.append(name,meta);button.append(roomIcon,copy);button.addEventListener("click",()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,room.id);else selectRoom(room.id);closeSidebar();});return button;
 }
+function currentBranchId() {
+  return state.focusPane > 0 ? state.extra[state.focusPane - 1]?.roomId : state.selectedRoom;
+}
+function branchBusy(id) {
+  return branchOperations.has(id) || modelChanges.has(id) || (state.selectedRoom === id && (state.sending || state.roomData?.busy)) || state.extra.some(pane => pane.roomId === id && (pane.sending || pane.data?.busy));
+}
+function updateBranchControls() {
+  const id = currentBranchId(), room = state.rooms.find(item => item.id === id && !item.archived), available = room && id !== MONITOR_ROOM;
+  const fork = $("#branch-fork"), merge = $("#branch-merge"), label = $("#branch-current");
+  if (!fork) return;
+  fork.disabled = !available || branchBusy(id);
+  merge.disabled = !available || branchBusy(id) || !relatedBranches(id).length;
+  fork.setAttribute("aria-label", available ? `${room.name}에서 Fork` : "현재 가지에서 Fork");
+  label.textContent = available ? room.name : "새 줄기에서 시작하세요";
+}
+function branchSvg(tag, attributes = {}) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
+  return element;
+}
 function renderRooms() {
-  const focused=els.roomList.contains(document.activeElement)?{roomId:document.activeElement.dataset.roomId,groupId:document.activeElement.dataset.groupId}:null;
-  renderAgentLinks();els.roomList.replaceChildren();$("#create-sidebar-group").disabled=!sidebarState.loaded||sidebarState.groups.length>=20;
-  const query=$("#room-search").value.trim().toLocaleLowerCase(),groups=sidebarState.groups;
-  const visibleRooms=state.rooms.filter(room=>!!room.archived===showDeletedRooms&&(showDeletedRooms||room.id!==MONITOR_ROOM)&&[room.name,room.description,groups.find(group=>group.id===room.groupId)?.name].join(" ").toLocaleLowerCase().includes(query));
-  if(query&&!visibleRooms.length){const empty=document.createElement("p");empty.className="search-empty";empty.textContent="검색 결과가 없습니다.";els.roomList.append(empty);}
-  const appendRooms=(target,rooms)=>rooms.forEach(room=>target.append(sidebarRoomButton(room)));
-  if(showDeletedRooms)appendRooms(els.roomList,visibleRooms);
-  else {
-    const pinned=visibleRooms.filter(room=>room.pinned);if(pinned.length){const heading=document.createElement("div");heading.className="room-section-label";heading.textContent="고정";els.roomList.append(heading);appendRooms(els.roomList,pinned);}
-    for(const group of groups) {
-      const rooms=visibleRooms.filter(room=>!room.pinned&&room.groupId===group.id);
-      if(query&&!rooms.length)continue;
-      const section=document.createElement("section");section.className="room-group";
-      const header=document.createElement("div");header.className="room-group-header";
-      const toggle=document.createElement("button");toggle.type="button";toggle.className="room-group-toggle";toggle.dataset.groupId=group.id;const expanded=!!query||!group.collapsed;toggle.setAttribute("aria-expanded",String(expanded));toggle.setAttribute("aria-controls","room-group-"+group.id);
-      const name=document.createElement("span");name.textContent=group.name;const count=document.createElement("small");count.textContent=String(rooms.length);toggle.append(name,count);
-      toggle.onclick=()=>{void saveSidebar({...sidebarState,groups:sidebarState.groups.map(item=>item.id===group.id?{...item,collapsed:!item.collapsed}:item)});};
-      const menu=document.createElement("button");menu.type="button";menu.className="room-group-menu";menu.textContent="…";menu.setAttribute("aria-label",group.name+" 그룹 관리");menu.onclick=()=>openSidebarGroupMenu(group);header.append(toggle,menu);
-      const list=document.createElement("div");list.id="room-group-"+group.id;list.hidden=!expanded;appendRooms(list,rooms);
-      if(!rooms.length){const empty=document.createElement("p");empty.className="room-group-empty";empty.textContent="대화를 우클릭해 이 그룹으로 옮기세요.";list.append(empty);}
-      section.append(header,list);els.roomList.append(section);
+  const focus = els.roomList.contains(document.activeElement) ? {roomId: document.activeElement.dataset.roomId, action: document.activeElement.dataset.branchAction} : null;
+  renderAgentLinks(); els.roomList.replaceChildren(); updateBranchControls();
+  const query = $("#room-search").value.trim().toLocaleLowerCase();
+  if (showDeletedRooms) {
+    const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM && [room.name, room.description].join(" ").toLocaleLowerCase().includes(query));
+    for (const room of archived) {
+      const row = document.createElement("div"); row.className = "branch-archive-row";
+      const button = sidebarRoomButton(room), restore = document.createElement("button");
+      restore.type = "button"; restore.className = "branch-restore"; restore.textContent = "복원"; restore.dataset.roomId = room.id; restore.dataset.branchAction = "restore";
+      restore.setAttribute("aria-label", room.name + " 복원"); restore.onclick = () => void updateRoomListPreference(room, {archived:false});
+      row.append(button, restore); els.roomList.append(row);
     }
-    const ungrouped=visibleRooms.filter(room=>!room.pinned&&!groups.some(group=>group.id===room.groupId));
-    if(groups.length&&ungrouped.length){const heading=document.createElement("div");heading.className="room-section-label";heading.textContent="그룹 없음";els.roomList.append(heading);}
-    appendRooms(els.roomList,ungrouped);
+    if (!archived.length) { const empty = document.createElement("p"); empty.className = "search-empty"; empty.textContent = "보관된 가지가 없습니다."; els.roomList.append(empty); }
+  } else {
+    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {query});
+    const graphList = document.createElement("div"); graphList.className = "branch-graph";
+    const width = Math.min(72, Math.max(30, graph.laneCount * 13 + 12)), step = graph.laneCount > 1 ? (width - 18) / (graph.laneCount - 1) : 0;
+    graphList.style.setProperty("--branch-rail", width + "px");
+    const svg = branchSvg("svg", {class:"branch-lines", width, height:graph.rows.length * 56, "aria-hidden":"true"});
+    const byId = new Map(graph.rows.map(row => [row.id,row])), x = row => 9 + row.lane * step, y = row => row.index * 56 + 28;
+    for (const edge of graph.edges) {
+      const from = byId.get(edge.from), to = byId.get(edge.to), fromX=x(from), toX=x(to), end=y(to), start=y(from);
+      const d = fromX === toX ? `M${fromX},${start}V${end}` : `M${fromX},${start}V${end-18}Q${fromX},${end} ${(fromX+toX)/2},${end}H${toX}`;
+      svg.append(branchSvg("path", {d, class:`branch-path branch-color-${from.lane % 3}${edge.secondary ? " is-merge" : ""}`}));
+    }
+    for (const row of graph.rows) {
+      const active = currentBranchId() === row.id;
+      svg.append(branchSvg("circle", {cx:x(row), cy:y(row), r:active?5:3.5, class:`branch-node branch-color-${row.lane % 3}${active?" is-selected":""}`}));
+      const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
+      button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
+      const copy=document.createElement("span"); copy.className="branch-row-copy";
+      const name=document.createElement("strong"); name.textContent=(row.room.pinned?"· ":"")+row.room.name;
+      const meta=document.createElement("small"), parentNames=row.parents.map(id=>byId.get(id)?.room.name).filter(Boolean);
+      const relation=row.operation==="merge"?"Merge":row.operation==="fork"?"Fork":"줄기";
+      meta.textContent=relation+(parentNames.length?" · "+parentNames.join(" + "):"")+(row.room.pinned?" · 고정":"");
+      button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":""}`);
+      copy.append(name,meta); button.append(copy);
+      button.onclick=()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,row.id);else void selectRoom(row.id);closeSidebar();};
+      graphList.append(button);
+    }
+    graphList.prepend(svg); els.roomList.append(graphList);
+    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=query?"검색 결과가 없습니다.":"+ 버튼으로 새 줄기를 시작하세요.";els.roomList.append(empty); }
   }
-  const trash=document.createElement("button");trash.className="deleted-rooms-toggle";trash.textContent=showDeletedRooms?"← 대화 목록":"삭제한 대화"+(state.rooms.some(room=>room.archived)?" ("+state.rooms.filter(room=>room.archived).length+")":"");trash.onclick=()=>{showDeletedRooms=!showDeletedRooms;renderRooms();};els.roomList.append(trash);
-  if(focused){const target=$$("button",els.roomList).find(button=>(focused.roomId&&button.dataset.roomId===focused.roomId)||(focused.groupId&&button.dataset.groupId===focused.groupId));target?.focus({preventScroll:true});}
+  const footer=document.createElement("div");footer.className="branch-list-footer";
+  const trash=document.createElement("button");trash.className="deleted-rooms-toggle";trash.type="button";trash.dataset.branchAction="archive";trash.textContent=showDeletedRooms?"← 가지로 돌아가기":"보관한 가지"+(state.rooms.some(room=>room.archived)?" ("+state.rooms.filter(room=>room.archived).length+")":"");trash.onclick=()=>{showDeletedRooms=!showDeletedRooms;renderRooms();};
+  const reset=document.createElement("button");reset.type="button";reset.className="branch-reset";reset.textContent="목록 비우기";reset.title="기존 가지를 보관하고 새 줄기를 시작합니다";reset.dataset.branchAction="reset";reset.onclick=()=>void resetConversations(reset);
+  footer.append(trash,reset);els.roomList.append(footer);
+  if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
 }
 function showEmpty() {
   state.selectedRoom = null;
+  state.roomData = null;
+  desktopUI?.setRoom(null);
   stopPolling();
   els.empty.classList.remove("is-hidden");
   els.roomView.classList.add("is-hidden");
@@ -986,7 +1022,7 @@ function createMessage(message, pane = null, roomId = state.selectedRoom) {
     const actions = document.createElement("div"); actions.className = "message-actions";
     const copy = document.createElement("button"); copy.type = "button"; copy.append(icon("copy")); copy.title = "메시지 복사"; copy.setAttribute("aria-label", copy.title);
     copy.onclick = () => navigator.clipboard.writeText(message.text || "").then(() => toast("복사했습니다.")).catch(() => toast("복사하지 못했습니다."));
-    const fork = document.createElement("button"); fork.type = "button"; fork.append(icon("fork")); fork.title = "여기서 포크하기 · 이 메시지까지의 맥락으로 새 대화를 만듭니다"; fork.setAttribute("aria-label", "여기서 포크하기");
+    const fork = document.createElement("button"); fork.type = "button"; fork.append(icon("fork")); fork.title = "여기서 포크 · 이 메시지까지를 줄기로 새 가지를 만듭니다"; fork.setAttribute("aria-label", "여기서 포크");
     fork.onclick = () => sessionAction("fork", pane, fork, message.id, roomId);
     actions.append(copy, fork); body.append(actions);
   }
@@ -1328,8 +1364,23 @@ function closeDialog(dialog) {
 let creatingSession=false;
 async function startNewSession() {
   if(creatingSession)return;creatingSession=true;
-  try {const data=await api("/api/rooms",{method:"POST",body:JSON.stringify({})});await loadRooms();await selectRoom(data.room.id);$("#message-input").focus();}
-  catch(error){toast(error.message);}finally{creatingSession=false;}
+  const userId=state.session?.user?.id,epoch=sidebarEpoch,current=()=>state.session?.user?.id===userId&&sidebarEpoch===epoch;
+  try {const data=await api("/api/rooms",{method:"POST",body:JSON.stringify({})});if(!current())return;await loadRooms();if(!current())return;state.focusPane=0;await selectRoom(data.room.id);$("#message-input").focus();}
+  catch(error){if(current())toast(error.message);}finally{creatingSession=false;}
+}
+async function resetConversations(button, dialog = null) {
+  const userId=state.session?.user?.id,epoch=sidebarEpoch;if(!userId||button.disabled)return;
+  if(state.rooms.some(room=>branchBusy(room.id))){toast("진행 중인 작업이 끝난 뒤 목록을 비워 주세요.");return;}
+  setBusy(button,true,"비우는 중…");
+  try {
+    const data=await api("/api/sessions/reset",{method:"POST",body:"{}"});
+    if(state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;
+    dialog?.close();stopProgressStreams();if(state.layout>1)setLayout(state.layout);
+    dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();showDeletedRooms=false;$("#room-search").value="";$("#message-input").value="";state.pendingSend=null;pendingMessages.clear();clearPendingAttachments();
+    await loadRooms();if(state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;await selectRoom(data.room.id);
+    toast(`${data.archived||0}개 가지를 보관하고 새 줄기를 시작했습니다.`);
+  } catch(error){if(state.session?.user?.id===userId&&sidebarEpoch===epoch)toast(error.message);}
+  finally{if(button.isConnected)setBusy(button,false);}
 }
 async function openCapabilityHub() {
   let dialog=$("#capability-hub");
@@ -1341,19 +1392,7 @@ async function openCapabilityHub() {
   sessionTitle.textContent="대화 세션";
   sessionNote.textContent="내 대화 목록을 비우고 새 세션을 시작합니다. 기존 기록은 ‘삭제한 대화’에서 복원할 수 있습니다.";
   reset.textContent="대화 목록 초기화";
-  reset.onclick=async()=>{
-    setBusy(reset,true,"초기화하는 중…");
-    try {
-      const data=await api("/api/sessions/reset",{method:"POST",body:"{}"});
-      dialog.close();
-      stopProgressStreams();
-      if(state.layout>1)setLayout(state.layout);
-      dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();
-      showDeletedRooms=false;$("#room-search").value="";$("#message-input").value="";state.pendingSend=null;
-      await loadRooms();await selectRoom(data.room.id);
-      toast(`${data.archived || 0}개 대화를 보관하고 새 세션을 시작했습니다.`);
-    } catch(error){toast(error.message);} finally{setBusy(reset,false);}
-  };
+  reset.onclick=()=>void resetConversations(reset,dialog);
   sessions.append(sessionTitle,sessionNote,reset);dialog.append(sessions);dialog.showModal();
   try {
     const data=await api("/api/admin/capabilities");
@@ -1369,7 +1408,7 @@ function roomContextOwner(pane = null) {
   const roomId=pane?pane.roomId:state.selectedRoom,data=pane?pane.data:state.roomData;
   const working=!!(data?.busy||(pane?pane.sending:state.sending));
   const role=data?.room?.role || state.rooms?.find(room=>room.id===roomId)?.role;
-  return {roomId,data,working,busy:working||modelChanges.has(roomId),canManage:role==="owner"};
+  return {roomId,data,working,busy:working||modelChanges.has(roomId)||branchOperations.has(roomId),canManage:role==="owner"};
 }
 function contextOwnerCurrent(roomId, userId, pane = null) {
   return state.session?.user?.id === userId && (pane ? state.extra.includes(pane) && pane.roomId === roomId : state.selectedRoom === roomId);
@@ -1378,27 +1417,61 @@ async function refreshContextOwner(pane) {
   if (pane) await refreshExtra(state.extra.indexOf(pane));
   else await refreshRoom(true);
 }
-async function sessionAction(action, pane = null, button = null, throughMessageId = null, expectedRoomId = null) {
-  const {roomId, busy} = roomContextOwner(pane), userId=state.session?.user?.id;
-  if (!roomId || roomId===MONITOR_ROOM || busy || (expectedRoomId && expectedRoomId !== roomId)) return;
-  if(action==="compact"&&!roomContextOwner(pane).canManage)return;
-  button ||= $(action==="fork"?"#fork-session":"#compact-session");
-  if (button) button.disabled=true;
+function relatedBranches(roomId) {
+  return relatedBranchIds(roomId, state.rooms.filter(room=>room.id!==MONITOR_ROOM), state.forks).map(id=>state.rooms.find(room=>room.id===id));
+}
+function branchDestination(pane = null, explicit = false) {
+  const target = explicit && state.focusPane > 0 ? state.extra[state.focusPane-1] : pane;
+  const selection = state.selectedRoom, focused=state.focusPane, targetId=target?.roomId, userId=state.session?.user?.id, epoch=sidebarEpoch;
+  return {pane:target,userId,valid:()=>state.session?.user?.id===userId&&sidebarEpoch===epoch,current:()=>state.session?.user?.id===userId&&sidebarEpoch===epoch&&state.selectedRoom===selection&&state.focusPane===focused&&(!target||(state.extra.includes(target)&&target.roomId===targetId))};
+}
+async function openBranchResult(data, destination) {
+  await loadRooms(); if(!destination.current())return;
+  showDeletedRooms=false;$("#room-search").value="";
+  if(destination.pane)assignExtra(state.extra.indexOf(destination.pane),data.room.id);else await selectRoom(data.room.id);
+  renderRooms();closeSidebar();
+  toast(data.contextTruncated?"맥락이 길어 일부만 이어받았습니다. 원본 가지에서 전체 기록을 볼 수 있어요.":"새 가지를 만들었습니다. 원본은 그대로 남습니다.");
+}
+function mergeBranch(roomId) {
+  const room=state.rooms.find(item=>item.id===roomId&&!item.archived), branches=relatedBranches(roomId);
+  if(!room||branchBusy(roomId))return;
+  if(!branches.length){toast("합칠 가지가 없습니다. 먼저 Fork로 가지를 만들어 주세요.");return;}
+  const destination=branchDestination(null,true),dialog=sidebarDialog("가지 Merge"),form=document.createElement("form");dialog.classList.add("branch-merge-dialog");
+  const note=document.createElement("p");note.className="sidebar-dialog-note";note.textContent="두 가지의 현재 맥락으로 새 가지를 만듭니다. 원본 가지는 유지됩니다.";
+  const label=document.createElement("label");label.textContent="함께 이어갈 가지";
+  const select=document.createElement("select");select.required=true;
+  for(const branch of branches){const option=document.createElement("option");option.value=branch.id;option.textContent=branch.name+" · "+branch.id.slice(0,8);option.disabled=branchBusy(branch.id);select.append(option);}
+  const first=branches.find(branch=>!branchBusy(branch.id));select.value=first?.id||"";label.append(select);
+  const preview=document.createElement("p");preview.className="branch-merge-preview";
+  const error=document.createElement("p");error.className="form-message";error.setAttribute("role","status");
+  const actions=document.createElement("div");actions.className="sidebar-dialog-actions";
+  const cancel=document.createElement("button");cancel.type="button";cancel.textContent="취소";cancel.onclick=()=>dialog.close();
+  const submit=document.createElement("button");submit.type="submit";submit.textContent="새 가지로 Merge";submit.disabled=!first;
+  const update=()=>{preview.textContent=room.name+" + "+(branches.find(branch=>branch.id===select.value)?.name||"가지 선택")+" → 새 가지";};select.onchange=update;update();
+  actions.append(cancel,submit);form.append(note,label,preview,error,actions);dialog.append(form);
+  form.onsubmit=async event=>{
+    event.preventDefault();const sourceId=select.value;
+    if(submit.disabled||!destination.valid()||!relatedBranches(roomId).some(branch=>branch.id===sourceId))return;
+    if(branchBusy(roomId)||branchBusy(sourceId)){error.textContent="진행 중인 작업이 끝난 뒤 합쳐 주세요.";return;}
+    branchOperations.add(roomId);branchOperations.add(sourceId);select.disabled=true;submit.disabled=true;updateModelAvailability();
+    try{const data=await api(`/api/rooms/${encodeURIComponent(roomId)}/merge`,{method:"POST",body:JSON.stringify({sourceId})});if(!destination.valid())return;const follow=dialog.open;dialog.close();if(follow)await openBranchResult(data,destination);else await loadRooms();}
+    catch(e){if(destination.valid()&&dialog.open)error.textContent=e.message;}
+    finally{if(destination.valid()){branchOperations.delete(roomId);branchOperations.delete(sourceId);select.disabled=false;submit.disabled=false;updateModelAvailability();}}
+  };
+  dialog.showModal();select.focus();
+}
+async function sessionAction(action, pane = null, button = null, throughMessageId = null, expectedRoomId = null, explicitRoomId = null) {
+  const owner=roomContextOwner(pane),roomId=explicitRoomId||owner.roomId,destination=branchDestination(pane,!!explicitRoomId);
+  if(!roomId||roomId===MONITOR_ROOM||branchBusy(roomId)||(expectedRoomId&&expectedRoomId!==roomId)||!state.rooms.some(room=>room.id===roomId&&!room.archived))return;
+  if(action==="compact"&&!owner.canManage)return;
+  if(button)button.disabled=true;branchOperations.add(roomId);updateModelAvailability();
   try {
-    const data=await api(`/api/rooms/${encodeURIComponent(roomId)}/${action}`,{method:"POST",body:JSON.stringify(throughMessageId ? {throughMessageId} : {})});
-    if (!contextOwnerCurrent(roomId,userId,pane)) return;
-    if(action==="fork") {
-      await loadRooms();
-      if (!contextOwnerCurrent(roomId,userId,pane)) return;
-      if (pane) assignExtra(state.extra.indexOf(pane),data.room.id);
-      else await selectRoom(data.room.id);
-      toast("맥락을 이어받은 새 세션을 만들었습니다.");
-    } else {
-      await refreshContextOwner(pane);
-      toast("기록은 보존하고 대화 맥락을 압축했습니다.");
-    }
-  } catch(error){toast(error.message);}
-  finally {if(button?.isConnected){const owner=roomContextOwner(pane);button.disabled=owner.busy||(action==="compact"&&(!owner.canManage||!(owner.data?.context?.usedChars>=500)));}}
+    const data=await api(`/api/rooms/${encodeURIComponent(roomId)}/${action}`,{method:"POST",body:JSON.stringify(throughMessageId?{throughMessageId}:{})});
+    if(!destination.valid())return;
+    if(action==="fork")await openBranchResult(data,destination);
+    else if(destination.current()){await refreshContextOwner(pane);toast("기록은 보존하고 대화 맥락을 압축했습니다.");}
+  }catch(error){if(destination.valid())toast(error.message);}
+  finally{if(destination.valid()){branchOperations.delete(roomId);if(button?.isConnected)button.disabled=branchBusy(roomId);updateModelAvailability();}}
 }
 function contextNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value.toLocaleString("ko-KR") : "확인 불가";
@@ -1595,6 +1668,7 @@ function saveRoomPreferences(id, prefs) {
   try { localStorage.setItem("community-model:" + state.session.user.id + ":" + id, JSON.stringify(prefs)); } catch {}
 }
 function updateModelAvailability() {
+  updateBranchControls();
   updateAgentPresence();
   for(const select of $$(".model-select")) {
     const pane=select._pane||null,owner=roomContextOwner(pane);
@@ -1783,11 +1857,14 @@ function renderExtraPanes() {
     const section = document.createElement("section");
     section.className = "room-view extra-pane" + (state.focusPane === index + 1 ? " is-focus" : "");
     if (spans) section.style.gridColumn = "span " + spans[index + 1];
-    section.addEventListener("mousedown", () => {
+    const focusBranchPane = () => {
+      if(state.focusPane===index+1)return;
       state.focusPane = index + 1;
       $("#room-view").classList.remove("is-focus");
       $$(".extra-pane").forEach((item, itemIndex) => item.classList.toggle("is-focus", itemIndex + 1 === state.focusPane));
-    });
+      renderRooms();
+    };
+    section.addEventListener("mousedown",focusBranchPane);section.addEventListener("focusin",focusBranchPane);
     const header = document.createElement("header");
     header.className = "pane-bar";
     const title = document.createElement("h2");
@@ -1995,6 +2072,8 @@ function assignExtra(index, roomId) {
 function bind() {
   setupSidebarResize();
   $("#create-sidebar-group").addEventListener("click",()=>openSidebarGroupEditor());
+  $("#branch-fork").addEventListener("click",()=>void sessionAction("fork",null,$("#branch-fork"),null,null,currentBranchId()));
+  $("#branch-merge").addEventListener("click",()=>mergeBranch(currentBranchId()));
   $("#room-search").addEventListener("input", renderRooms);
   document.addEventListener("keydown", (event) => {
     if (
@@ -2051,12 +2130,17 @@ function bind() {
   $("#effort-select").addEventListener("change",()=>{
     saveRoomPreferences(state.selectedRoom,{model:$("#model-select").dataset.chosen || "",effort:$("#effort-select").value});
   });
+  $("#room-view").addEventListener("focusin", () => {
+    if(state.focusPane===0)return;state.focusPane=0;desktopUI?.setRoom(state.selectedRoom);
+    $("#room-view").classList.add("is-focus");$$(".extra-pane").forEach(pane=>pane.classList.remove("is-focus"));renderRooms();
+  });
   $("#room-view").addEventListener("mousedown", () => {
     if (state.layout < 2) return;
     state.focusPane = 0;
     desktopUI?.setRoom(state.selectedRoom);
     $("#room-view").classList.add("is-focus");
     $$(".extra-pane").forEach((pane) => pane.classList.remove("is-focus"));
+    renderRooms();
   });
   $$(".split-picker button").forEach((button) => {
     button.addEventListener("click", () => setLayout(Number(button.dataset.split)));
@@ -2285,7 +2369,11 @@ function setupDock() {
     const targetRoom=state.rooms.find(r=>r.id===(room?.dataset.dockRoom || dockRoomAt(Number(panel.dataset.dockIndex))));
     if(targetRoom) {
       const addAction=(label,handler)=>{const b=document.createElement("button");b.type="button";b.setAttribute("role","menuitem");b.textContent=label;b.onclick=()=>{menu.hidden=true;handler();};menu.append(b);};
-      if(sidebarState.loaded&&targetRoom.id!==MONITOR_ROOM)addAction("그룹으로 이동",()=>openRoomGroupPicker(targetRoom));
+      if(targetRoom.id!==MONITOR_ROOM&&!targetRoom.archived){
+        addAction("여기서 Fork",()=>void sessionAction("fork",null,null,null,null,targetRoom.id));
+        addAction("다른 가지와 Merge",()=>mergeBranch(targetRoom.id));
+      }
+      if(sidebarState.loaded&&sidebarState.groups.length&&targetRoom.id!==MONITOR_ROOM)addAction("그룹으로 이동",()=>openRoomGroupPicker(targetRoom));
       addAction(targetRoom.pinned?"고정 해제":"상단에 고정",()=>updateRoomListPreference(targetRoom,{pinned:!targetRoom.pinned}));
       addAction(targetRoom.archived?"대화 복원":"대화 삭제",()=>{
         if(targetRoom.archived) return updateRoomListPreference(targetRoom,{archived:false});

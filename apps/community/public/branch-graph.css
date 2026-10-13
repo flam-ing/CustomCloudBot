@@ -1,0 +1,39 @@
+.branch-heading { margin-top:4px; padding:4px 16px 0; }
+.branch-heading-actions { display:flex; align-items:center; gap:5px; }
+.branch-heading #branch-fork { display:inline-flex; align-items:center; gap:5px; padding:6px 10px; border-radius:8px; color:#e5dafa; background:#b8a0e921; font-size:11px; }
+.branch-heading #branch-fork:hover:not(:disabled) { background:#b8a0e936; }
+.branch-heading #branch-fork .icon { width:14px; height:14px; }
+.branch-heading #branch-merge { padding:6px 7px; font-size:10px; }
+#create-sidebar-group[hidden] { display:none; }
+.branch-current { padding:0 16px; margin:7px 0 12px; color:#88848f; font-size:10px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.branch-graph { position:relative; margin:0 0 8px; }
+.branch-lines { position:absolute; top:0; left:0; pointer-events:none; z-index:2; overflow:visible; }
+.branch-color-0 { --branch-color:#b7a0ed; }
+.branch-color-1 { --branch-color:#d995b7; }
+.branch-color-2 { --branch-color:#74b6b0; }
+.branch-path { stroke:var(--branch-color); stroke-width:1.5; fill:none; opacity:.48; }
+.branch-path.is-merge { stroke-dasharray:3 3; opacity:.6; }
+.branch-node { stroke:var(--branch-color); stroke-width:1.5; fill:var(--sidebar); }
+.branch-node.is-selected { fill:var(--branch-color); stroke-width:2; }
+.branch-row { position:relative; z-index:1; display:flex; align-items:center; width:100%; height:56px; margin:0; padding:7px 10px 7px var(--branch-rail); color:var(--text); background:transparent; border:0; border-radius:8px; text-align:left; cursor:pointer; transition:background 150ms ease; }
+.branch-row:hover { background:#ffffff06; }
+.branch-row.is-selected { background:#b7a0ed0e; }
+.branch-row:focus-visible { outline:1px solid #b7a0ed; outline-offset:-1px; }
+.branch-row-copy { display:grid; gap:5px; min-width:0; }
+.branch-row-copy strong { font-size:12px; line-height:1.4; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.branch-row-copy small { font-size:9px; line-height:1.4; color:#817a89; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.branch-row.is-selected .branch-row-copy strong { color:#e4d5ff; }
+.branch-row.is-ancestor .branch-row-copy { opacity:.48; }
+.branch-list-footer { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; padding:12px 4px 0; border-top:1px solid #ffffff07; margin-top:12px; }
+.branch-list-footer .deleted-rooms-toggle { margin:0; padding:6px 4px; width:auto; flex:1; white-space:nowrap; text-align:left; }
+.branch-reset { background:transparent; color:#716c77; padding:6px 4px; font-size:10px; cursor:pointer; }
+.branch-reset:hover { color:#b6a7c7; }
+.branch-archive-row { display:flex; align-items:center; gap:4px; }
+.branch-archive-row .room-item { flex:1; min-width:0; }
+.branch-restore { flex:none; color:#bba5dd; background:transparent; padding:8px 4px; font-size:10px; }
+.branch-merge-dialog { width:min(430px,calc(100vw - 32px)); }
+.branch-merge-dialog select { width:100%; min-width:0; padding:10px; color:var(--text); background:var(--surface); border:1px solid #ffffff25; border-radius:8px; font:inherit; color-scheme:dark; }
+.branch-merge-dialog select:focus-visible { outline:2px solid #b7a0ed; outline-offset:2px; }
+.branch-merge-preview { font-size:12px; line-height:1.7; color:#c4b3de; overflow-wrap:anywhere; margin:18px 0 0; }
+.branch-merge-dialog .sidebar-dialog-actions button[type="submit"] { background:#b7a0ed24; color:#e3d7f5; }
+@media(prefers-reduced-motion:reduce) { .branch-row { transition:none; } }

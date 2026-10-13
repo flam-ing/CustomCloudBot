@@ -108,6 +108,7 @@ function initialize(db) {
     CREATE TABLE IF NOT EXISTS room_invites(token_hash TEXT PRIMARY KEY,room_id TEXT NOT NULL REFERENCES rooms(id),created_by TEXT NOT NULL,expires_at INTEGER NOT NULL,used_at INTEGER);
     CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,room_id TEXT NOT NULL,kind TEXT NOT NULL,author_id TEXT,author TEXT NOT NULL,text TEXT NOT NULL,client_nonce TEXT,created_at INTEGER NOT NULL,UNIQUE(room_id,client_nonce));
     CREATE INDEX IF NOT EXISTS room_messages ON messages(room_id,created_at);
+    CREATE TABLE IF NOT EXISTS message_origins(message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,origin_id TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS usage(user_id TEXT NOT NULL,day TEXT NOT NULL,turns INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,day));
     CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,room_id TEXT NOT NULL REFERENCES rooms(id),uploader_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,mime TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL,path TEXT NOT NULL,created_at INTEGER NOT NULL,bound_at INTEGER);
     CREATE INDEX IF NOT EXISTS room_attachments ON attachments(room_id,created_at);
@@ -355,6 +356,7 @@ export async function startCommunity(options = {}) {
       id: room.id,
       name: room.name,
       description: room.description,
+      createdAt: room.created_at,
       personal: isPersonalRoom(room) || isMailRoom(room),
       role: room.member_role,
       sharing: {
@@ -367,23 +369,103 @@ export async function startCommunity(options = {}) {
         .get(room.id).n,
     };
   }
+  function roomPreference(userId, roomId) {
+    try { return JSON.parse(db.prepare("SELECT value FROM settings WHERE key=?").get("room-ui:"+userId+":"+roomId)?.value || "{}"); }
+    catch { return {}; }
+  }
+  function assertRoomCapacity(userId) {
+    const active = db.prepare("SELECT id FROM rooms WHERE owner_id=? AND id!=?").all(userId, MONITOR_ROOM)
+      .filter(room => roomPreference(userId, room.id).archived !== true).length;
+    if (active >= 20) throw failure(409, "활성 세션은 최대 20개입니다. 사용하지 않는 대화를 보관한 뒤 다시 시도해주세요.");
+  }
+  function messageOrigin(messageId) {
+    return db.prepare("SELECT origin_id FROM message_origins WHERE message_id=?").get(messageId)?.origin_id || messageId;
+  }
+  function copyMessage(message, destinationId, userId, attachmentMap = new Map()) {
+    const messageId = randomUUID();
+    const result = db.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)").run(messageId, destinationId, message.kind, message.author_id, message.author, message.text, null, message.created_at);
+    db.prepare("INSERT INTO message_origins VALUES(?,?)").run(messageId, messageOrigin(message.id));
+    for (const attachment of db.prepare("SELECT a.* FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=?").all(message.id)) {
+      const attachmentId = randomUUID();
+      db.prepare("INSERT INTO attachments VALUES(?,?,?,?,?,?,?,?,?,?)").run(attachmentId, destinationId, userId, attachment.name, attachment.mime, attachment.kind, attachment.size, attachment.path, attachment.created_at, attachment.bound_at);
+      db.prepare("INSERT INTO message_attachments VALUES(?,?)").run(messageId, attachmentId);
+      attachmentMap.set(attachment.id, attachmentId);
+    }
+    return { id: messageId, rowid: Number(result.lastInsertRowid) };
+  }
   function copyTranscript(sourceId, destinationId, userId, cutoff = Number.MAX_SAFE_INTEGER) {
     const saved = savedContext(sourceId);
-    // A summary may mention messages after a historical fork point. Keep the
-    // raw transcript instead when its cutoff exceeds the selected message.
+    // Historical forks must never inherit a summary from after their branch point.
     const summary = Number(saved.through || 0) <= cutoff ? saved : {};
+    const attachmentMap = new Map();
     let through = 0;
-    for (const message of db.prepare("SELECT rowid,* FROM messages WHERE room_id=? AND rowid<=? ORDER BY created_at,rowid").all(sourceId, cutoff)) {
-      const messageId = randomUUID();
-      const result = db.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)").run(messageId, destinationId, message.kind, message.author_id, message.author, message.text, null, message.created_at);
-      if (message.rowid <= (summary.through || 0)) through = Number(result.lastInsertRowid);
-      for (const attachment of db.prepare("SELECT a.* FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=?").all(message.id)) {
-        const attachmentId = randomUUID();
-        db.prepare("INSERT INTO attachments VALUES(?,?,?,?,?,?,?,?,?,?)").run(attachmentId, destinationId, userId, attachment.name, attachment.mime, attachment.kind, attachment.size, attachment.path, attachment.created_at, attachment.bound_at);
-        db.prepare("INSERT INTO message_attachments VALUES(?,?)").run(messageId, attachmentId);
-      }
+    for (const message of db.prepare("SELECT rowid,* FROM messages WHERE room_id=? AND rowid<=? ORDER BY rowid").all(sourceId, cutoff)) {
+      const copied = copyMessage(message, destinationId, userId, attachmentMap);
+      if (message.rowid <= (summary.through || 0)) through = copied.rowid;
     }
-    if (summary.summary || through) db.prepare("INSERT INTO settings VALUES(?,?)").run("context:" + destinationId, JSON.stringify({summary: summary.summary || "", through}));
+    if (summary.summary || through) db.prepare("INSERT INTO settings VALUES(?,?)").run("context:" + destinationId, JSON.stringify({summary: summary.summary || "", through, merged: Boolean(summary.merged), imageIds: (summary.imageIds || []).map(id => attachmentMap.get(id)).filter(Boolean).slice(0, 2)}));
+  }
+  const roomIdPattern = /^[a-f0-9-]{36}$/;
+  function forkLinks() {
+    return db.prepare("SELECT key, value FROM settings WHERE key LIKE 'lineage:%'").all().flatMap((row) => {
+      try {
+        const value = JSON.parse(row.value), id = row.key.slice("lineage:".length);
+        const parents = [...new Set([...(Array.isArray(value.parents) ? value.parents : []), value.parent, value.mergedFrom].filter(parent => typeof parent === "string" && roomIdPattern.test(parent) && parent !== id))];
+        return roomIdPattern.test(id) && parents.length ? [{ id, parents, parent: parents[0], throughMessageId: value.throughMessageId || null, mergedFrom: parents[1] || null, operation: value.operation === "merge" || parents.length > 1 ? "merge" : "fork" }] : [];
+      } catch { return []; }
+    });
+  }
+  function visibleForkLinks(visibleIds) {
+    return forkLinks().filter(link => visibleIds.has(link.id)).map(link => ({
+      ...link, parents: link.parents.filter(id => visibleIds.has(id)),
+      parent: visibleIds.has(link.parent) ? link.parent : null,
+      mergedFrom: visibleIds.has(link.mergedFrom) ? link.mergedFrom : null,
+      throughMessageId: visibleIds.has(link.parent) ? link.throughMessageId : null,
+    }));
+  }
+  function relatedBranches(first, second) {
+    const graph = new Map(forkLinks().map(link => [link.id, link.parents]));
+    const ancestors = (id) => {
+      const seen = new Set(), pending = [id];
+      while (pending.length) {
+        const next = pending.pop();
+        if (seen.has(next)) continue;
+        seen.add(next);
+        for (const parent of graph.get(next) || []) if (!seen.has(parent)) pending.push(parent);
+      }
+      return seen;
+    };
+    const mine = ancestors(first);
+    return [...ancestors(second)].some(id => mine.has(id));
+  }
+  function mergedContext(first, second) {
+    const contexts = [contextFor(first).text, contextFor(second).text];
+    // Share a fixed budget fairly; never run an AI or replay tools to merge.
+    const total = contexts.reduce((sum, value) => sum + value.length, 0);
+    const budget = 6800;
+    let limits = contexts.map(value => value.length);
+    if (total > budget) {
+      const small = contexts[0].length < contexts[1].length ? 0 : 1;
+      limits[small] = Math.min(contexts[small].length, budget / 2);
+      limits[1 - small] = budget - limits[small];
+    }
+    const sections = contexts.map((value, i) => {
+      const limit = limits[i];
+      if (value.length > limit) value = value.slice(0, Math.floor(limit / 2)) + "\n[일부 맥락 생략]\n" + value.slice(-Math.floor(limit / 2));
+      return `가지 ${i + 1}의 현재 맥락 (대화 자료):\n${value || "(현재 맥락 없음)"}`;
+    });
+    return { summary: sections.join("\n\n"), truncated: total > budget };
+  }
+  function contextImages(roomId) {
+    const saved = savedContext(roomId);
+    const recent = db.prepare("SELECT a.id,a.path,a.mime,m.created_at FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id JOIN messages m ON m.id=ma.message_id WHERE a.room_id=? AND a.kind='image' AND m.id IN (SELECT id FROM messages WHERE room_id=? AND rowid>? ORDER BY created_at DESC,rowid DESC LIMIT 4) ORDER BY m.created_at DESC,m.rowid DESC LIMIT 2").all(roomId, roomId, saved.through || 0);
+    // Inherited image snapshots expire after four new messages, like ordinary images.
+    const newCount = db.prepare("SELECT count(*) n FROM (SELECT 1 FROM messages WHERE room_id=? AND rowid>? LIMIT 4)").get(roomId, saved.through || 0).n;
+    if (newCount < 4) for (const id of (saved.imageIds || []).slice(0, 2)) {
+      const image = db.prepare("SELECT a.id,a.path,a.mime,m.created_at FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id JOIN messages m ON m.id=ma.message_id WHERE a.id=? AND a.room_id=? AND a.kind='image'").get(id, roomId);
+      if (image && !recent.some(item => item.id === image.id)) recent.push(image);
+    }
+    return recent.slice(0, 2);
   }
   async function nameSession(room,user,content) {
     try {
@@ -401,13 +483,13 @@ export async function startCommunity(options = {}) {
     const saved=savedContext(roomId);
     const rows=db.prepare("SELECT rowid,author,text FROM messages WHERE room_id=? AND rowid>? ORDER BY created_at DESC,rowid DESC LIMIT 20").all(roomId,saved.through || 0).reverse();
     const recent=rows.map(m=>m.author+": "+m.text.slice(0,1200)).join("\n");
-    const summary=saved.summary ? ("이전 대화 요약 (대화 자료):\n"+saved.summary+"\n").slice(0,8000) : "";
+    const summary=saved.summary ? ((saved.merged ? "병합한 대화 맥락 (대화 자료):\n" : "이전 대화 요약 (대화 자료):\n")+saved.summary+"\n").slice(0,8000) : "";
     const remaining=Math.max(0,8000-summary.length);
     const messages=remaining ? recent.slice(-remaining) : "";
     const value=summary+messages;
     const estimatedTokens=Math.ceil(value.length/2),summaryTokens=Math.ceil(summary.length/2);
     return {text:value,usedChars:value.length,budgetChars:8000,estimatedTokens,
-      messageTokens:estimatedTokens-summaryTokens,summaryTokens,compacted:Boolean(saved.summary)};
+      messageTokens:estimatedTokens-summaryTokens,summaryTokens,compacted:Boolean(saved.summary),merged:Boolean(saved.merged)};
   }
   function insertMessage(
     roomId,
@@ -503,7 +585,7 @@ export async function startCommunity(options = {}) {
       const hasBrowser = browserTools.configured(room.id) || provisioner.enabled;
       jobDir = await mkdtemp(join(dataDir, "job-"));
       let sharedContext = contextFor(room.id).text;
-      const recentImages = db.prepare("SELECT a.path,a.mime FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id JOIN messages m ON m.id=ma.message_id WHERE a.room_id=? AND a.kind='image' AND m.id IN (SELECT id FROM messages WHERE room_id=? AND rowid>? ORDER BY created_at DESC,rowid DESC LIMIT 4) ORDER BY m.created_at DESC LIMIT 2").all(room.id,room.id,savedContext(room.id).through || 0);
+      const recentImages = contextImages(room.id);
       let imageContext="";
       if (recentImages.length) {
         reportProgress(room.id,"image","이미지 확인 중");
@@ -704,6 +786,8 @@ export async function startCommunity(options = {}) {
           "/agent-presence.js": ["agent-presence.js", "text/javascript"],
           "/agent-presence.css": ["agent-presence.css", "text/css"],
           "/notification-center.js": ["notification-center.js", "text/javascript"],
+          "/branch-graph.mjs": ["branch-graph.mjs", "text/javascript"],
+          "/branch-graph.css": ["branch-graph.css", "text/css"],
           "/notification-center.css": ["notification-center.css", "text/css"],
           "/invite-links.mjs": ["invite-links.mjs", "text/javascript"],
           "/profile-settings.js": ["profile-settings.js", "text/javascript"],
@@ -1184,9 +1268,12 @@ export async function startCommunity(options = {}) {
             "SELECT r.*,m.role member_role FROM rooms r JOIN room_members m ON r.id=m.room_id WHERE m.user_id=? ORDER BY r.created_at DESC",
           )
           .all(user.id)
-          .map(room => ({...roomView(room), ...JSON.parse(db.prepare("SELECT value FROM settings WHERE key=?").get("room-ui:"+user.id+":"+room.id)?.value || "{}")}));
+          .filter(room => { try { roomFor(room.id, user); return true; } catch { return false; } })
+          .map(room => ({...roomView(room), ...roomPreference(user.id, room.id)}));
+        const memberIds = new Set(rooms.map((room) => room.id));
         return reply(res, 200, {
           rooms,
+          forks: visibleForkLinks(memberIds),
           bots: BOTS,
           usage: {
             used:
@@ -1202,7 +1289,7 @@ export async function startCommunity(options = {}) {
         const result=transaction(()=>{
           const rooms=db.prepare("SELECT r.id FROM rooms r JOIN room_members m ON m.room_id=r.id WHERE m.user_id=? AND r.id!=?").all(user.id,MONITOR_ROOM);
           if(rooms.some(r=>roomJobs.has(r.id))) throw failure(409,"진행 중인 답변이 끝난 뒤 초기화해주세요.");
-          for(const room of rooms) db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("room-ui:"+user.id+":"+room.id,JSON.stringify({pinned:false,archived:true}));
+          for(const room of rooms) db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("room-ui:"+user.id+":"+room.id,JSON.stringify({...roomPreference(user.id, room.id),pinned:false,archived:true}));
           const id=randomUUID();db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(id,"새 대화","",user.id,Date.now());db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(id,user.id,"owner");
           if(user.role==="admin") db.prepare("INSERT INTO settings VALUES(?,?)").run("private-fork:"+id,"1");
           return {room:roomView(roomFor(id,user)),archived:rooms.length};
@@ -1212,12 +1299,7 @@ export async function startCommunity(options = {}) {
         const name = text(body.name || "새 대화", 80, true),
           description = text(body.description ?? "", 300);
         const room = transaction(() => {
-          if (
-            db
-              .prepare("SELECT count(*) n FROM rooms WHERE owner_id=?")
-              .get(user.id).n >= 20
-          )
-            throw failure(409, "한 계정에서 만들 수 있는 방은 20개입니다.");
+          assertRoomCapacity(user.id);
           const id = randomUUID();
           db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(
             id,
@@ -1261,7 +1343,7 @@ export async function startCommunity(options = {}) {
         return reply(res, 200, { room: roomView(room) });
       }
       const match = url.pathname.match(
-        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|shared-copy|compact|progress|context-reset|usage))?$/,
+        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage))?$/,
       );
       if (!match) throw failure(404, "찾을 수 없습니다.");
       const room = roomFor(match[1], user);
@@ -1308,16 +1390,61 @@ export async function startCommunity(options = {}) {
           cutoff = message.rowid;
         }
         const fork=transaction(()=>{
-          if(db.prepare("SELECT count(*) n FROM rooms WHERE owner_id=?").get(user.id).n>=20) throw failure(409,"세션은 최대 20개까지 만들 수 있습니다.");
+          assertRoomCapacity(user.id);
           const id=randomUUID();
           db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(id,room.name.slice(0,65)+" · Fork","분기한 대화",user.id,Date.now());
           db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(id,user.id,"owner");
           if(isPersonalRoom(room)) db.prepare("INSERT INTO settings VALUES(?,?)").run("private-fork:"+id,"1");
           if(isMailRoom(room)) db.prepare("INSERT INTO settings VALUES(?,?)").run("mail-room:"+id,"1");
           copyTranscript(room.id, id, user.id, cutoff);
+          db.prepare("INSERT INTO settings VALUES(?,?)").run("lineage:"+id, JSON.stringify({ parent: room.id, parents: [room.id], operation: "fork", throughMessageId: Object.hasOwn(body, "throughMessageId") ? text(body.throughMessageId, 36, true) : null }));
           return roomFor(id,user);
         });
         return reply(res,201,{room:roomView(fork)});
+      }
+      if (match[2] === "merge" && method === "POST") {
+        const sourceId = text(body.sourceId, 36, true);
+        if (sourceId === room.id) throw failure(400, "같은 가지는 합칠 수 없습니다.");
+        const source = roomFor(sourceId, user);
+        if (room.id === MONITOR_ROOM || source.id === MONITOR_ROOM) throw failure(400, "대시보드는 합칠 수 없습니다.");
+        if (!relatedBranches(room.id, source.id)) throw failure(400, "같은 줄기에서 갈라진 대화만 합칠 수 있습니다.");
+        if (roomJobs.has(room.id) || roomJobs.has(source.id)) throw failure(409, "응답이 끝난 뒤 합쳐 주세요.");
+        const snapshot = mergedContext(room.id, source.id);
+        const activeImages = [...contextImages(room.id), ...contextImages(source.id)].sort((a, b) => b.created_at - a.created_at);
+        const merged = transaction(() => {
+          assertRoomCapacity(user.id);
+          const id = randomUUID();
+          db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(id, room.name.slice(0, 58) + " · Merge", "현재 맥락을 합친 대화", user.id, Date.now());
+          db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(id, user.id, "owner");
+          if (isPersonalRoom(room) || isPersonalRoom(source)) db.prepare("INSERT INTO settings VALUES(?,?)").run("private-fork:"+id, "1");
+          if (isMailRoom(room) || isMailRoom(source)) db.prepare("INSERT INTO settings VALUES(?,?)").run("mail-room:"+id, "1");
+          const union = new Map(), attachmentMap = new Map();
+          for (const sourceRoom of [room, source]) for (const message of db.prepare("SELECT rowid,* FROM messages WHERE room_id=? ORDER BY rowid").all(sourceRoom.id)) {
+            const origin = messageOrigin(message.id);
+            if (union.has(origin)) union.get(origin).aliases.push(message.id);
+            else union.set(origin, {message, aliases:[]});
+          }
+          // Insert in the same chronology rendered by GET /messages: historical
+          // Fork uses rowid as its inclusive cutoff, so parent-by-parent inserts
+          // would otherwise pull a later visible message into an earlier fork.
+          const ordered = [...union.values()].sort((a, b) => a.message.created_at - b.message.created_at || a.message.rowid - b.message.rowid || a.message.id.localeCompare(b.message.id));
+          for (const {message, aliases} of ordered) {
+            const copiedId = copyMessage(message, id, user.id, attachmentMap).id;
+            if (!aliases.length) continue;
+            const copied = db.prepare("SELECT a.id,a.path FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=?").all(copiedId);
+            for (const alias of aliases) for (const image of db.prepare("SELECT a.id,a.path FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=?").all(alias)) {
+              const match = copied.find(item => item.path === image.path);
+              if (match) attachmentMap.set(image.id, match.id);
+            }
+          }
+          insertMessage(id, "system", "안내", "두 가지의 현재 맥락을 합쳤습니다. 원래 가지와 대화 기록은 그대로 남아 있습니다." + (snapshot.truncated ? " 맥락 길이 제한으로 각 가지의 일부 내용은 생략했습니다." : ""));
+          const through = db.prepare("SELECT max(rowid) n FROM messages WHERE room_id=?").get(id).n;
+          const imageIds = [...new Set(activeImages.map(image => attachmentMap.get(image.id)).filter(Boolean))].slice(0, 2);
+          db.prepare("INSERT INTO settings VALUES(?,?)").run("context:"+id, JSON.stringify({summary:snapshot.summary, through, merged:true, imageIds}));
+          db.prepare("INSERT INTO settings VALUES(?,?)").run("lineage:"+id, JSON.stringify({parent:room.id, mergedFrom:source.id, parents:[room.id,source.id], operation:"merge"}));
+          return roomFor(id, user);
+        });
+        return reply(res, 201, { room: roomView(merged), contextTruncated: snapshot.truncated });
       }
       if (match[2] === "shared-copy" && method === "POST") {
         if (room.id === MONITOR_ROOM || room.member_role !== "owner") throw failure(403, "대화 소유자만 공유용 사본을 만들 수 있습니다.");
@@ -1326,7 +1453,7 @@ export async function startCommunity(options = {}) {
         if (roomJobs.has(room.id)) throw failure(409, "응답이 끝난 뒤 공유용 사본을 만들어 주세요.");
         const name = text(body.name || room.name.slice(0, 65) + " · 함께 대화", 80, true);
         const shared = transaction(() => {
-          if (db.prepare("SELECT count(*) n FROM rooms WHERE owner_id=?").get(user.id).n >= 20) throw failure(409, "세션은 최대 20개까지 만들 수 있습니다.");
+          assertRoomCapacity(user.id);
           const id = randomUUID();
           db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(id, name, "함께 대화하는 세션", user.id, Date.now());
           db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(id, user.id, "owner");
@@ -1359,7 +1486,8 @@ export async function startCommunity(options = {}) {
       }
       if (match[2] === "preferences" && method === "POST") {
         if (typeof body.pinned !== "boolean" || typeof body.archived !== "boolean") throw failure(400,"대화 설정이 올바르지 않습니다.");
-        const prior=JSON.parse(db.prepare("SELECT value FROM settings WHERE key=?").get("room-ui:"+user.id+":"+room.id)?.value || "{}");
+        const prior=roomPreference(user.id, room.id);
+        if (prior.archived === true && !body.archived && room.owner_id === user.id && room.id !== MONITOR_ROOM) assertRoomCapacity(user.id);
         const preferences={pinned:body.pinned,archived:body.archived,groupId:Object.hasOwn(body,"groupId")?sidebarStore.group(user.id,body.groupId):prior.groupId || null};
         db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("room-ui:"+user.id+":"+room.id,JSON.stringify(preferences));
         return reply(res,200,preferences);
