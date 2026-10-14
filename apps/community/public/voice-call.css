@@ -1,0 +1,24 @@
+.voice-call-dialog { width:min(440px,calc(100vw - 32px)); padding:28px; border:1px solid #ffffff18; border-radius:28px; background:#19191e; color:#f5f3fa; box-shadow:0 24px 100px #0009; }
+.voice-call-dialog::backdrop { background:#08080a8c; backdrop-filter:blur(7px); }
+.voice-call-dialog .voice-call-top { display:flex; align-items:center; justify-content:space-between; color:#bbb4ca; font-size:13px; }
+.voice-call-dialog h2 { margin:24px 0 6px; font-size:23px; line-height:1.4; overflow-wrap:anywhere; text-align:center; }
+.voice-call-dialog .voice-call-time { text-align:center; color:#9992a8; font-variant-numeric:tabular-nums; font-size:13px; }
+.voice-orb { width:88px; height:88px; border-radius:50%; margin:27px auto 22px; display:grid; place-items:center; background:radial-gradient(circle at 32% 25%,#dbceff,#9274cf 58%,#4c3c72); box-shadow:0 0 50px #b998fa25; }
+.voice-orb svg { width:34px; height:34px; color:#231937; }
+.voice-call-dialog[data-stage="listening"] .voice-orb,.voice-call-dialog[data-stage="speaking"] .voice-orb { animation:voice-breathe 2s ease-in-out infinite; }
+.voice-call-status { text-align:center; min-height:24px; font-weight:600; }
+.voice-call-transcript { font-size:14px; color:#c4c0ce; line-height:1.7; max-height:140px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; margin:16px 0; }
+.voice-call-note { color:#aaa2b6; font-size:12px; line-height:1.7; text-align:center; margin:12px 0; }
+.voice-call-controls { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin-top:22px; }
+.voice-call-controls button,.voice-call-link { border:1px solid #ffffff20; border-radius:14px; padding:11px 16px; background:#ffffff09; color:inherit; font-size:14px; cursor:pointer; }
+.voice-call-controls .voice-start { background:#c1a5ef; color:#21162f; font-weight:700; border-color:transparent; }
+.voice-call-controls .voice-end { background:#b9425a; color:#fff; border-color:transparent; }
+.voice-call-controls button:disabled { opacity:.45; cursor:default; }
+.voice-call-controls [hidden] { display:none; }
+.voice-call-link { display:block; margin:18px auto 0; font-size:12px; background:transparent; border:0; color:#c1afe4; }
+.voice-call-pill { position:fixed; right:24px; bottom:24px; z-index:100; border:1px solid #c7a7ff55; border-radius:99px; background:#292033; color:#efe4ff; box-shadow:0 8px 36px #0006; padding:13px 20px; max-width:min(360px,90vw); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+.voice-call-pill[hidden] { display:none; }
+.topbar-actions .voice-call-button.is-active { color:#cdb0ff; background:#b285f51a; }
+@keyframes voice-breathe { 50% { transform:scale(1.06); box-shadow:0 0 60px #b998fa45; } }
+@media (prefers-reduced-motion:reduce) { .voice-orb { animation:none!important; } }
+@media (max-width:520px) { .voice-call-dialog { padding:22px; } .voice-call-pill { bottom:16px; right:16px; } }

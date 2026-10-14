@@ -31,7 +31,8 @@ import { EFFORTS, createProviderPool, formatModelList, publicModels } from "./pr
 import { createOpenClawFromEnv } from "./lib/backend/openclaw-http.mjs";
 import { parseDesktops, createDesktopHub } from "./desktop.mjs";
 import { BROWSER_TOOL_DEFINITIONS, createBrowserTools } from "./browser-tools.mjs";
-import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, MAX_DEFAULT } from "./media.mjs";
+import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, createUploadLimiter, MAX_DEFAULT } from "./media.mjs";
+import { createVoiceTranscriber, VOICE_MAX_BYTES } from "./voice.mjs";
 import { createPushService, validateSubscription, validateEndpoint } from "./push.mjs";
 
 import { createProvisioner } from "./provisioner.mjs";
@@ -166,6 +167,8 @@ export async function startCommunity(options = {}) {
   db.prepare("DELETE FROM sessions WHERE expires_at<?").run(Date.now());
   const demo = env.COMMUNITY_DEMO === "1";
   const setupVault = createSetupVault(dataDir, env);
+  const voice = createVoiceTranscriber({getEnv:()=>setupVault.runtimeEnv(),fetchImpl:options.voiceFetchImpl});
+  const voiceRequests = createUploadLimiter({global:4,perUser:1});
   const identity = () => serviceIdentity(setupVault.name);
   const integrations = options.integrations ?? createIntegrations({path:env.COMMUNITY_INTEGRATIONS_FILE, getResources:()=>setupVault.resourceEnv()});
   const mailbox = options.mailbox ?? createMailbox({env,fetchImpl:options.mailFetchImpl});
@@ -928,6 +931,9 @@ export async function startCommunity(options = {}) {
           "/branch-graph.css": ["branch-graph.css", "text/css"],
           "/routines.js": ["routines.js", "text/javascript"],
           "/routines.css": ["routines.css", "text/css"],
+          "/voice-call.js": ["voice-call.js", "text/javascript"],
+          "/voice-call.css": ["voice-call.css", "text/css"],
+          "/voice-session.mjs": ["voice-session.mjs", "text/javascript"],
           "/topic-switch.mjs": ["topic-switch.mjs", "text/javascript"],
           "/notification-center.css": ["notification-center.css", "text/css"],
           "/invite-links.mjs": ["invite-links.mjs", "text/javascript"],
@@ -1038,8 +1044,41 @@ export async function startCommunity(options = {}) {
       if (authenticating) limit("auth:" + req.socket.remoteAddress, 20);
       else if(!/^\/api\/rooms\/[a-f0-9-]{36}\/workspace(?:\/|$)/.test(url.pathname))limit("api:" + user.id, 180);
       const isAttachmentPost = method === "POST" && /^\/api\/rooms\/[a-f0-9-]{36}\/attachments$/.test(url.pathname);
-      const needsJsonBody = method === "PATCH" || (method === "PUT" && url.pathname === "/api/sidebar") || (method === "POST" && !isAttachmentPost) || (method === "DELETE" && url.pathname === "/api/push/subscriptions");
+      const isVoicePost = method === "POST" && /^\/api\/rooms\/[a-f0-9-]{36}\/voice\/transcribe$/.test(url.pathname);
+      const needsJsonBody = method === "PATCH" || (method === "PUT" && url.pathname === "/api/sidebar") || (method === "POST" && !isAttachmentPost && !isVoicePost) || (method === "DELETE" && url.pathname === "/api/push/subscriptions");
       const body = needsJsonBody ? await readBody(req, url.pathname === "/api/admin/mail/send" ? 65536 : MAX_BODY) : {};
+      if (url.pathname === "/api/voice" && method === "GET") return reply(res,200,voice.status());
+      const voiceMatch = url.pathname.match(/^\/api\/rooms\/([a-f0-9-]{36})\/voice\/transcribe$/);
+      if (voiceMatch && method === "POST") {
+        const room = roomFor(voiceMatch[1],user);
+        if (room.id === MONITOR_ROOM) throw failure(400,"대화를 선택한 뒤 전화해 주세요.");
+        if (!voice.status().configured) throw failure(503,"음성 통화에는 Groq API 연결이 필요합니다. 설정에서 연결해 주세요.");
+        limit("voice:"+user.id,30);
+        const release = await voiceRequests.acquire(user.id);
+        const controller = new AbortController();
+        controllers.add(controller);
+        const cancel = () => {if(!res.writableEnded)controller.abort();};
+        res.once("close",cancel);
+        const currentMember = () => {
+          const current = userFor(req);
+          if (!current || current.sessionHash !== user.sessionHash) throw failure(403,"다시 로그인한 뒤 전화해 주세요.");
+          roomFor(room.id,current);
+        };
+        let upload;
+        try {
+          upload = await receiveAttachment(req,{mediaDir,maxBytes:VOICE_MAX_BYTES,userId:user.id});
+          if (upload.kind !== "audio") throw failure(415,"음성 파일을 보내 주세요.");
+          currentMember();
+          const result = await voice.transcribe({bytes:await readFile(upload.tempPath),mime:upload.declaredMime,signal:controller.signal});
+          currentMember();
+          return reply(res,200,result);
+        } finally {
+          if (upload) await unlink(upload.tempPath).catch(()=>{});
+          res.removeListener("close",cancel);
+          controllers.delete(controller);
+          release();
+        }
+      }
       if (authenticating) {
         const username = text(body.username, 40, true).toLowerCase();
         if (

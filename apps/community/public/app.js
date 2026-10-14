@@ -13,6 +13,7 @@ import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
 import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
 import { createRoutineUI } from "/routines.js";
+import { createVoiceCall } from "/voice-call.js";
 import { suggestTopicSwitch } from "/topic-switch.mjs";
 const inviteLinks = createInviteLinks();
 
@@ -51,6 +52,7 @@ let notificationUI;
 let profileUI;
 let sharingUI;
 let routineUI;
+let voiceUI;
 const topicPrompts = new Set();
 const pendingMessages = new Map();
 const presenceTurns = new Map();
@@ -210,6 +212,7 @@ async function loadSession() {
 }
 $("#startup-retry").addEventListener("click", loadSession);
 function showAuth() {
+  voiceUI?.reset();
   agentPresence?.reset(); presenceErrors.clear(); presenceTurns.clear(); pendingMessages.clear(); notificationUI?.reset();
   profileUI?.close(); sharingUI?.close();
   setupUI?.reset();
@@ -343,6 +346,7 @@ async function loadRooms() {
       const requested = new URLSearchParams(window.location.search).get("room");
       await selectRoom(activeRooms.find(room => room.id === requested)?.id || activeRooms.find(room => room.id === last)?.id || activeRooms[0].id);
     }
+    voiceUI?.handleLink();
   } catch (error) {
     if(userId===state.session?.user?.id&&epoch===sidebarEpoch)toast(error.message);
   }
@@ -1181,6 +1185,7 @@ async function uploadAttachments(files) {
   }
 }
 async function toggleRecording() {
+  if (voiceUI?.roomId) { toast("통화가 끝난 뒤 녹음을 첨부할 수 있어요."); return; }
   const button = $("#record-button");
   if (state.recordingPending) return;
   if (state.recording) {
@@ -1939,6 +1944,11 @@ function renderExtraPanes() {
     desktopButton.disabled = !pane.roomId;
     desktopButton.addEventListener("click", () => desktopUI?.openRoom(pane.roomId));
     header.append(desktopButton);
+    const callButton = document.createElement("button");
+    callButton.type = "button"; callButton.className = "voice-call-button"; callButton.append(icon("phone"));
+    callButton.setAttribute("aria-label", "이 대화에 전화하기"); callButton.title = "이 대화에 전화하기";
+    callButton.disabled = !room || room.archived || room.id === MONITOR_ROOM;
+    callButton.onclick = () => voiceUI?.open(room); header.append(callButton);
 
     const list = document.createElement("div");
     list.className = "message-list";
@@ -2180,6 +2190,7 @@ function bind() {
   );
   $("#logout-button").addEventListener("click", async () => {
     try {
+      voiceUI?.reset();
       await pwaUI?.clearSession({ keepSession: true });
       await api("/api/logout", { method: "POST", body: "{}" });
       await pwaUI?.clearSession();
@@ -2220,6 +2231,7 @@ function bind() {
     event.target.value = "";
   });
   $("#record-button").addEventListener("click", toggleRecording);
+  $("#voice-call-button").addEventListener("click", () => voiceUI?.open(state.rooms.find(room => room.id === currentBranchId())));
   $("#record-cancel-button").addEventListener("click", () => {
     if (!state.recording) return;
     state.recordingCancelled = true;
@@ -2303,6 +2315,14 @@ pwaUI = createPwaController({ api, getSession: () => state.session, toast });
 desktopUI = createDesktopUI({ api, getRoomId: () => state.selectedRoom, getRoomName: id => state.rooms.find(room=>room.id===id)?.name || "대화", toast });
 profileUI = createProfileSettings({api,getSession:()=>state.session,toast,onSaved: user=>{state.session.user=user;$("#profile-name").textContent=user.displayName;$("#profile-avatar").textContent=initials(user.displayName);$("#profile-avatar").style.backgroundColor=user.avatarColor || "";}});
 routineUI = createRoutineUI({api,getSession:()=>state.session,getRoom:()=>state.rooms.find(room=>room.id===currentBranchId()),toast,onChanged:async()=>{await refreshRoom(true);await loadRooms();refreshExtras();}});
+voiceUI = createVoiceCall({api,getSession:()=>state.session,getRoom:id=>state.rooms.find(room=>room.id===id),toast,
+  beforeStart:cancelActiveRecording,
+  getSelection:id=>{
+    const prefs=roomPreferences(id),pane=state.extra.find(item=>item.roomId===id);
+    return {model:id===state.selectedRoom?$("#model-select").value:pane?.model||prefs.model||"",effort:id===state.selectedRoom?$("#effort-select").value:pane?.effort||prefs.effort||"",botIds:[state.selectedBots[0]||state.bots[0]?.id].filter(Boolean)};
+  },
+  onMessages:id=>{if(state.selectedRoom===id)void refreshRoom(true);refreshExtras();}
+});
 sharingUI = createRoomSharing({api,getSession:()=>state.session,toast,onRoomCreated:async room=>{await loadRooms();await selectRoom(room.id);},onInvite:room=>makeInvite(`/api/rooms/${encodeURIComponent(room.id)}/invites`,"room")});
 const workspaceButton = $(".topbar-actions .desktop-button");
 if (workspaceButton) {

@@ -1,0 +1,39 @@
+name: CustomCloudBot
+options:
+  bundleIdPrefix: org.example
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    # Set these in Xcode or a private local xcconfig; no deployment identity is committed.
+    PRODUCT_BUNDLE_IDENTIFIER: org.example.customcloudbot
+    CLOUDBOT_ORIGIN: ""
+targets:
+  CustomCloudBot:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: CustomCloudBot
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: 이 대화의 에이전트와 음성으로 통화하려면 마이크를 사용합니다.
+        UIBackgroundModes: [audio]
+        CloudBotOrigin: $(CLOUDBOT_ORIGIN)
+        CFBundleURLTypes:
+          - CFBundleURLName: org.example.customcloudbot.call
+            CFBundleURLSchemes: [customcloudbot]
+        NSUserActivityTypes: [INStartCallIntent, INStartAudioCallIntent]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIApplicationSupportsIndirectInputEvents: true
