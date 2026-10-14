@@ -115,6 +115,25 @@ class RollbackTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_app_only_compose_validation_identifies_baseline_or_updated(self):
+        for phase in ['Baseline', 'Updated']:
+            run = Mock(side_effect=RuntimeError('safe classified diagnostic'))
+            with self.subTest(phase=phase), self.assertRaisesRegex(RuntimeError, phase + ' application compose validation failed'):
+                install.validate_compose(run, ['docker', 'compose', '-f', '/private/compose.yml'], phase)
+            self.assertEqual(run.call_args.args[-3:], ('config', '--quiet', 'app'))
+
+    def test_structural_fallback_hides_credentials_paths_ids_and_arbitrary_numbers(self):
+        source = ('service "my-private-service" refers to undefined network private-network: invalid compose project; '
+                  'sk-live-abcdef123456 token@example.com /home/private/.env 11111111-2222-4333-8444-555555555555 '
+                  '123456789 168.107.91.96 line 27')
+        safe = install.structural_stderr(source)
+        for private in ['my-private-service', 'private-network', 'sk-live-abcdef123456', 'token@example.com',
+                        '/home/private/.env', '11111111-2222-4333-8444-555555555555', '123456789', '168.107.91.96']:
+            self.assertNotIn(private, safe)
+        self.assertIn('refers to undefined network', safe)
+        self.assertIn('line 27', safe)
+        self.assertLessEqual(len(install.structural_stderr(source * 100)), 1000)
+
     def test_command_runner_preserves_compose_cwd(self):
         with patch.object(install.subprocess, 'run', return_value=SimpleNamespace(stdout='ok', stderr='', returncode=0)) as run:
             self.assertEqual(install.run_command('docker', 'compose', 'config', '--quiet', cwd=Path('/srv/app/apps/community/deploy')), 'ok')

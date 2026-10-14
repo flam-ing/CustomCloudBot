@@ -17,10 +17,47 @@ LOCK = '/run/lock/openclaw-deploy.lock'
 SERVICE = 'community-host-admin.service'
 
 
+def structural_stderr(stderr):
+    """Fixed-vocabulary fallback: no arbitrary names, paths, IDs or values."""
+    vocabulary = set(('error warning failed failure unable cannot could can does do did is are was were '
+                      'a an the and or but in on at for from of to with without must should be has have '
+                      'no not found missing required invalid unexpected unsupported unknown undefined '
+                      'network networks service services volume volumes secret secrets config configs '
+                      'compose project environment mapping key already defined line lines depends depends_on '
+                      'dependency dependencies refers reference references build context container containers '
+                      'file files port ports name named property properties additional allowed empty '
+                      'list sequence string number boolean null object path directory permission denied '
+                      'doesn exist exists cannot find read parse parsing validate validation validating '
+                      'interpolation format duplicate conflicting conflict circular cycle external declared '
+                      'enabled disabled option options flag flags argument arguments value values type '
+                      'expected schema resource resources mount mounts bind source target socket daemon '
+                      'connect connection refused unavailable unhealthy healthy running stopped exited '
+                      'failed reading loading load open opening stat document documents syntax end').split())
+    punctuation = set(',;:!?()[]{}\"\'')
+    output = []
+    previous = ''
+    for token in re.findall(r'[A-Za-z0-9_./@+=-]+|[,;:!?()\[\]{}\"\']', stderr[:12000]):
+        lower = token.lower()
+        if lower in vocabulary:
+            rendered = lower
+        elif token in punctuation:
+            rendered = token
+        elif previous == 'line' and re.fullmatch(r'[0-9]{1,6}', token):
+            rendered = token
+        else:
+            rendered = '[REDACTED]'
+        if rendered != '[REDACTED]' or not output or output[-1] != rendered:
+            output.append(rendered)
+        previous = lower
+        if len(output) >= 200:
+            break
+    return ' '.join(output)[:1000] or '<empty>'
+
+
 def command_failure(args, result):
     """Report structural diagnostics without echoing interpolated secret values."""
     stderr = result.stderr or ''
-    detail = 'unclassified (stderr withheld)'
+    detail = 'unclassified; structure=' + structural_stderr(stderr)
     variable = re.search(r'(?:required variable\s+|variable\s+[\"\']?)([A-Za-z_][A-Za-z0-9_]{0,127})[\"\']?\s+(?:is missing|is not set)', stderr)
     field = re.search(r'\b((?:services|networks|volumes|configs|secrets)\.[A-Za-z_][A-Za-z0-9_.\[\]-]{0,160})', stderr)
     line = re.search(r'\byaml: line ([0-9]+):', stderr)
@@ -46,6 +83,13 @@ def run_command(*args, cwd=None):
     if result.returncode:
         raise command_failure(args, result)
     return result.stdout
+
+
+def validate_compose(run, compose, phase):
+    try:
+        run(*compose, 'config', '--quiet', 'app')
+    except RuntimeError as error:
+        raise RuntimeError(phase + ' application compose validation failed: ' + str(error)) from None
 
 
 def mapping_block(lines, key, indent):
@@ -227,6 +271,10 @@ def install_locked():
     manifest = Path('/etc/openclaw/compose.yml')
     original = release.read_root_file(manifest)
     updated = patch_manifest(original.decode(), owner_id)
+    compose = ['docker', 'compose', '--project-directory', str(directory), '--env-file', str(directory / '.env.production'),
+               '-f', str(manifest), '-p', config['compose_project']]
+    # Establish the original app's validity before backups or any host mutation.
+    validate_compose(run, compose, 'Baseline')
     previous_state = unit_state()
     library = Path('/usr/local/lib/community-host-admin')
     paths = [manifest, Path('/etc/openclaw/host-admin.json'), Path('/etc/systemd/system/community-host-admin.service'), library / 'service.py']
@@ -253,8 +301,6 @@ def install_locked():
     if library.is_symlink() or (library.exists() and (not library.is_dir()
             or library.stat().st_uid != 0 or library.stat().st_mode & 0o022)):
         raise ValueError('Unsafe library path')
-    compose = ['docker', 'compose', '--project-directory', str(directory), '--env-file', str(directory / '.env.production'),
-               '-f', str(manifest), '-p', config['compose_project']]
     service_touched = app_touched = False
     try:
         library.mkdir(mode=0o755, exist_ok=True)
@@ -264,7 +310,7 @@ def install_locked():
         write_root(paths[1], json.dumps({'user_ids':[owner_id], 'peer_uid':1000, 'socket_path':SOCKET}))
         write_root(paths[2], (HERE / 'community-host-admin.service').read_bytes(), 0o644)
         write_root(manifest, updated)
-        run(*compose, 'config', '--quiet')
+        validate_compose(run, compose, 'Updated')
         run('systemctl', 'daemon-reload')
         service_touched = True
         run('systemctl', 'enable', 'community-host-admin.service')
