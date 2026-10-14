@@ -1,0 +1,24 @@
+[Unit]
+Description=CustomCloudBot owner-only host administrator command broker
+After=local-fs.target
+ConditionPathExists=/etc/openclaw/host-admin.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -u /usr/local/lib/community-host-admin/service.py
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=community-admin
+RuntimeDirectoryMode=0755
+StateDirectory=community-host-admin
+StateDirectoryMode=0700
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -37,6 +37,7 @@ jobs:
           python3 -m unittest discover -s scripts/deploy -p 'test_*.py'
           python3 -m unittest discover -s apps/community/deploy -p 'test_configuration.py'
           python3 -m unittest discover -s apps/community/deploy/provisioner -p 'test_service.py'
+          python3 -m unittest discover -s apps/community/deploy/host-admin -p 'test_*.py'
       - name: Test native workspace bridge
         run: |
           python3 -m venv "$RUNNER_TEMP/workspace-tests"

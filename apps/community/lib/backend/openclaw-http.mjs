@@ -9,7 +9,7 @@ const MAX_TEXT = 8000;
  * Small server-only adapter for OpenClaw's documented OpenResponses endpoint.
  * It deliberately exposes no Gateway session listing, tools, files, or browser
  * access. Each turn has a fresh session key scoped to user, room, and bot.
- * Only validated application-owned browser client tools can be dispatched.
+ * Only advertised application-owned client tools can be dispatched.
  * The dedicated Gateway must separately deny its built-in tools.
  */
 export class OpenClawHttpAdapter {
@@ -54,9 +54,15 @@ export class OpenClawHttpAdapter {
         { type: "message", role: "user", content: String(request.user ?? "").slice(0, MAX_TEXT) },
       ];
       const browser = request?.browser;
+      const definitions = request.toolDefinitions === undefined ? BROWSER_TOOL_DEFINITIONS : request.toolDefinitions;
+      if (!Array.isArray(definitions) || definitions.some((tool) => tool?.type !== "function" || typeof tool.function?.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(tool.function.name))) {
+        throw new Error("Invalid OpenClaw client tool definitions");
+      }
       let actions = 0;
       for (let callCount = 0; callCount < 5; callCount += 1) {
-      const tools = browser && actions < 4 && callCount < 4 ? BROWSER_TOOL_DEFINITIONS.map((tool) => ({ type: "function", name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })) : [];
+      controller.signal.throwIfAborted();
+      const tools = browser && actions < 4 && callCount < 4 ? definitions.map((tool) => ({ type: "function", name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })) : [];
+      const allowedNames = new Set(tools.map((tool) => tool.name));
       request.onProgress?.("model",callCount?"조회 결과 정리 중":"답변 작성 중");
       const response = await this.fetchImpl(this.endpoint, {
         method: "POST",
@@ -77,15 +83,24 @@ export class OpenClawHttpAdapter {
       }
       const calls = Array.isArray(payload?.output) ? payload.output.filter((item) => item?.type === "function_call") : [];
       if (calls.length) {
-        if (!browser || calls.length > 4 - actions) throw new Error("OpenClaw browser action budget exceeded");
+        if (!browser || calls.length > 4 - actions) throw new Error("OpenClaw client tool action budget exceeded");
         if (callCount >= 4 || typeof request.beforeAdditionalModelCall !== "function") throw new Error("OpenClaw continuation quota is unavailable");
+        const parsedCalls = calls.map((call) => {
+          if (typeof call.call_id !== "string" || call.call_id.length > 200 || typeof call.name !== "string" || !allowedNames.has(call.name) || typeof call.arguments !== "string" || call.arguments.length > 10000) throw new Error("Invalid OpenClaw client tool call");
+          let args; try { args = JSON.parse(call.arguments); } catch { throw new Error("Invalid OpenClaw client tool arguments"); }
+          return { call, args };
+        });
         input.push(...(Array.isArray(payload.output) ? payload.output : []));
-        for (const call of calls) {
-          if (typeof call.call_id !== "string" || call.call_id.length > 200 || typeof call.name !== "string" || !BROWSER_TOOL_DEFINITIONS.some((tool) => tool.function.name === call.name) || typeof call.arguments !== "string" || call.arguments.length > 10000) throw new Error("Invalid OpenClaw browser tool call");
-          let args; try { args = JSON.parse(call.arguments); } catch { throw new Error("Invalid OpenClaw browser tool arguments"); }
+        for (const { call, args } of parsedCalls) {
+          controller.signal.throwIfAborted();
           actions += 1;
           let output;
-          try { output = await browser(call.name, args, { signal }); } catch (error) { output = error?.status ? error.message : "The browser action failed."; }
+          try { output = await browser(call.name, args, { signal: controller.signal }); }
+          catch (error) {
+            controller.signal.throwIfAborted();
+            output = error?.status ? error.message : "The requested tool action failed.";
+          }
+          controller.signal.throwIfAborted();
           input.push({ type: "function_call_output", call_id: call.call_id, output: String(output).slice(0, 8000) });
         }
         await request.beforeAdditionalModelCall();
@@ -95,7 +110,7 @@ export class OpenClawHttpAdapter {
       if (!text) throw new Error("OpenClaw gateway returned no text");
       return normalizeBotOutput(text);
       }
-      throw new Error("OpenClaw browser turn budget exhausted");
+      throw new Error("OpenClaw client tool turn budget exhausted");
     } catch (error) {
       if (controller.signal.aborted && !signal?.aborted) throw new Error("OpenClaw gateway request timed out");
       throw error;
@@ -137,5 +152,8 @@ function extractText(payload) {
 
 export function createOpenClawFromEnv(env = process.env, fetchImpl = fetch) {
   if (!(env.COMMUNITY_OPENCLAW_BASE_URL && env.COMMUNITY_OPENCLAW_TOKEN)) return null;
-  return new OpenClawHttpAdapter({ baseUrl: env.COMMUNITY_OPENCLAW_BASE_URL, token: env.COMMUNITY_OPENCLAW_TOKEN, agentId: env.COMMUNITY_OPENCLAW_AGENT_ID ?? "default", fetchImpl, allowPrivateHttp: env.COMMUNITY_OPENCLAW_ALLOW_PRIVATE_HTTP === "1" });
+  const configuredTimeout = env.COMMUNITY_OPENCLAW_TIMEOUT_MS;
+  const timeoutMs = configuredTimeout === undefined || configuredTimeout === "" ? 20_000 : Number(configuredTimeout);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 180_000) throw new Error("COMMUNITY_OPENCLAW_TIMEOUT_MS must be an integer between 1000 and 180000");
+  return new OpenClawHttpAdapter({ baseUrl: env.COMMUNITY_OPENCLAW_BASE_URL, token: env.COMMUNITY_OPENCLAW_TOKEN, agentId: env.COMMUNITY_OPENCLAW_AGENT_ID ?? "default", fetchImpl, timeoutMs, allowPrivateHttp: env.COMMUNITY_OPENCLAW_ALLOW_PRIVATE_HTTP === "1" });
 }

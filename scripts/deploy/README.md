@@ -1,5 +1,15 @@
 # Operator-configured deployment
 
+The optional `host-admin` operation in `OCI deployment setup` installs the
+[owner-only host broker](../../apps/community/deploy/host-admin/README.md) after
+the supporting application release has deployed. It pins the sole existing
+administrator's UUID in root-owned private configuration, adds the internal Unix
+socket mount to the private Compose manifest, recreates only the app, and checks
+root execution plus non-owner rejection. It refuses installations with multiple
+administrators rather than selecting one implicitly. Use the existing temporary
+bootstrap credential for this explicit operation and remove that secret after
+verification; normal main-branch deployment continues with the restricted key.
+
 Forks have **no deployment target**. CI builds and tests on its own, and skips
 production deployment until the operator explicitly sets its repository variables
 and secret. No server address, GitHub account, room ID, mail account, or API key

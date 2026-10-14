@@ -5,7 +5,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [inspect, install]
+        options: [inspect, install, host-admin]
 permissions:
   contents: read
 concurrency:
@@ -48,6 +48,10 @@ jobs:
             ssh "${args[@]}" "$target" 'mkdir -p .openclaw-bootstrap && chmod 700 .openclaw-bootstrap'
             scp "${args[@]}" scripts/deploy/release.py scripts/deploy/install.sh "$target:.openclaw-bootstrap/"
             printf '%s\n' "$DEPLOY_PUBLIC_KEY" | ssh "${args[@]}" "$target" 'sudo -n bash .openclaw-bootstrap/install.sh'
+          elif [ "$OPERATION" = host-admin ]; then
+            ssh "${args[@]}" "$target" 'mkdir -p .openclaw-bootstrap/host-admin && chmod 700 .openclaw-bootstrap .openclaw-bootstrap/host-admin'
+            scp "${args[@]}" apps/community/deploy/host-admin/install.py apps/community/deploy/host-admin/service.py apps/community/deploy/host-admin/community-host-admin.service "$target:.openclaw-bootstrap/host-admin/"
+            ssh "${args[@]}" "$target" 'sudo -n python3 .openclaw-bootstrap/host-admin/install.py'
           else
             exit 2
           fi

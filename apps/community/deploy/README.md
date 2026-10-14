@@ -1,5 +1,13 @@
 # CustomCloudBot self-hosted Docker deployment
 
+Optional [owner-only host administration](host-admin/README.md) gives an explicitly
+selected administrator account root command tools across its ordinary chats,
+Forks and routines. Authorization follows the authenticated message sender, so
+sharing a room or forking its history does not grant this authority to invitees.
+It is disabled in fork defaults and requires a separately installed host service.
+The shared desktop/browser stays non-root. Replies in shared rooms remain visible
+to room members; the agent is instructed not to publish raw credentials.
+
 These files are templates for your own Linux host. They contain no configured server, cloud account, domain, workspace UUID or model provider. Docker Compose does not create a cloud VM, disk, DNS record or paid subscription. Choose the host and its billing limits separately.
 
 The application, shared desktop, Caddy and optional OpenClaw gateway use separate containers. This is an invite-only workspace: invited users share the configured desktop's browser logins and files, while chat membership and session authorization remain enforced. Do not expose the desktop to users who should not share that computer.
