@@ -3,6 +3,7 @@
 import importlib.machinery
 import importlib.util
 import fcntl
+import difflib
 import json
 import os
 from pathlib import Path
@@ -158,6 +159,26 @@ def patch_manifest(source, owner_id):
     return ''.join(lines[:start] + app + lines[end:])
 
 
+def changed_manifest_structure(source, updated):
+    """Only changed lines and adjacent indentation/keys; never scalar values."""
+    before = source.splitlines(keepends=True)
+    after = updated.splitlines(keepends=True)
+    selected = set()
+    for tag, _a, _b, start, end in difflib.SequenceMatcher(a=before, b=after, autojunk=False).get_opcodes():
+        if tag != 'equal':
+            selected.update(range(max(0, start - 2), min(len(after), end + 2)))
+    rows = []
+    for index in sorted(selected)[:60]:
+        line = after[index]
+        stripped = line.strip()
+        key = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_-]{0,100}):(?:\s|$)', line)
+        kind = ('blank' if not stripped else 'comment' if stripped.startswith('#') else
+                'key=' + key[1] if key else 'list-item' if stripped.startswith('- ') else 'scalar')
+        rows.append({'line': index + 1, 'indent': len(line) - len(line.lstrip(' ')),
+                     'structure': kind, 'ending': 'CRLF' if line.endswith('\r\n') else 'LF' if line.endswith('\n') else 'none'})
+    return rows
+
+
 def write_root(path, content, mode=0o600):
     path = Path(path)
     if path.is_symlink():
@@ -310,7 +331,11 @@ def install_locked():
         write_root(paths[1], json.dumps({'user_ids':[owner_id], 'peer_uid':1000, 'socket_path':SOCKET}))
         write_root(paths[2], (HERE / 'community-host-admin.service').read_bytes(), 0o644)
         write_root(manifest, updated)
-        validate_compose(run, compose, 'Updated')
+        try:
+            validate_compose(run, compose, 'Updated')
+        except RuntimeError:
+            print('Updated compose changed-line structure: ' + json.dumps(changed_manifest_structure(original.decode(), updated)), flush=True)
+            raise
         run('systemctl', 'daemon-reload')
         service_touched = True
         run('systemctl', 'enable', 'community-host-admin.service')

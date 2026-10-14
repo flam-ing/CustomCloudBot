@@ -33,6 +33,16 @@ volumes:
 
 
 class ManifestTests(unittest.TestCase):
+    def test_changed_structure_only_reports_indents_keys_and_line_numbers(self):
+        changed = install.patch_manifest(FIXTURE, OWNER)
+        structure = install.changed_manifest_structure(FIXTURE, changed)
+        rendered = json.dumps(structure)
+        self.assertNotIn(OWNER, rendered)
+        self.assertNotIn('${PRIVATE_VALUE}', rendered)
+        self.assertNotIn('example-data', rendered)
+        self.assertIn('COMMUNITY_HOST_ADMIN_USER_IDS', rendered)
+        self.assertTrue(all(set(row) == {'line', 'indent', 'structure', 'ending'} for row in structure))
+
     def test_idempotent_and_preserves_unrelated_settings(self):
         changed = install.patch_manifest(FIXTURE, OWNER)
         self.assertEqual(install.patch_manifest(changed, OWNER), changed)
