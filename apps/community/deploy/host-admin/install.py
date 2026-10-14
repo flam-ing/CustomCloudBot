@@ -17,6 +17,37 @@ LOCK = '/run/lock/openclaw-deploy.lock'
 SERVICE = 'community-host-admin.service'
 
 
+def command_failure(args, result):
+    """Report structural diagnostics without echoing interpolated secret values."""
+    stderr = result.stderr or ''
+    detail = 'unclassified (stderr withheld)'
+    variable = re.search(r'(?:required variable\s+|variable\s+[\"\']?)([A-Za-z_][A-Za-z0-9_]{0,127})[\"\']?\s+(?:is missing|is not set)', stderr)
+    field = re.search(r'\b((?:services|networks|volumes|configs|secrets)\.[A-Za-z_][A-Za-z0-9_.\[\]-]{0,160})', stderr)
+    line = re.search(r'\byaml: line ([0-9]+):', stderr)
+    if variable:
+        detail = 'missing_environment_variable=' + variable[1]
+    elif ('env file' in stderr.lower() or 'env-file' in stderr.lower()) and any(
+            phrase in stderr.lower() for phrase in ('not found', 'no such file', 'couldn\'t find', 'cannot find')):
+        detail = 'missing_environment_file'
+    elif field:
+        detail = 'invalid_compose_field=' + field[1]
+    elif line:
+        detail = 'invalid_yaml_line=' + line[1]
+    elif 'permission denied' in stderr.lower():
+        detail = 'permission_denied'
+    elif 'cannot connect to the docker daemon' in stderr.lower():
+        detail = 'docker_daemon_unavailable'
+    label = 'docker compose' if args[:2] == ('docker', 'compose') else args[0]
+    return RuntimeError(f'Host installation step failed: {label} rc={result.returncode} {detail}')
+
+
+def run_command(*args, cwd=None):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=180, cwd=cwd)
+    if result.returncode:
+        raise command_failure(args, result)
+    return result.stdout
+
+
 def mapping_block(lines, key, indent):
     starts = [i for i, line in enumerate(lines) if re.match(r'^' + ' ' * indent + re.escape(key) + r':', line)]
     if len(starts) != 1 or lines[starts[0]].rstrip() != ' ' * indent + key + ':':
@@ -182,11 +213,9 @@ def install_locked():
     loader.exec_module(release)
     config = release.load_config()
     app = config['compose_project'] + '-app-1'
+    directory = Path(config['checkout_root']) / 'apps/community/deploy'
     def run(*args):
-        result = subprocess.run(args, capture_output=True, text=True, timeout=180)
-        if result.returncode:
-            raise RuntimeError('Host installation step failed: ' + args[0])
-        return result.stdout
+        return run_command(*args, cwd=directory if args[:2] == ('docker', 'compose') else None)
     # Never enable every role=admin implicitly. Pin the one existing owner's UUID.
     verify_app_uid(run, app)
     query = "import {DatabaseSync} from 'node:sqlite';const d=new DatabaseSync('/data/community.sqlite',{readOnly:true});console.log(JSON.stringify(d.prepare(\"SELECT id FROM users WHERE role='admin' ORDER BY created_at\").all()));d.close();"
@@ -224,7 +253,6 @@ def install_locked():
     if library.is_symlink() or (library.exists() and (not library.is_dir()
             or library.stat().st_uid != 0 or library.stat().st_mode & 0o022)):
         raise ValueError('Unsafe library path')
-    directory = Path(config['checkout_root']) / 'apps/community/deploy'
     compose = ['docker', 'compose', '--project-directory', str(directory), '--env-file', str(directory / '.env.production'),
                '-f', str(manifest), '-p', config['compose_project']]
     service_touched = app_touched = False

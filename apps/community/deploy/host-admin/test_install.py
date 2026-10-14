@@ -115,6 +115,25 @@ class RollbackTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_command_runner_preserves_compose_cwd(self):
+        with patch.object(install.subprocess, 'run', return_value=SimpleNamespace(stdout='ok', stderr='', returncode=0)) as run:
+            self.assertEqual(install.run_command('docker', 'compose', 'config', '--quiet', cwd=Path('/srv/app/apps/community/deploy')), 'ok')
+            self.assertEqual(run.call_args.kwargs['cwd'], Path('/srv/app/apps/community/deploy'))
+
+    def test_command_failure_diagnostics_never_expose_values(self):
+        for stderr, expected in [
+                ('required variable COMMUNITY_ORIGIN is missing a value: secret-value', 'missing_environment_variable=COMMUNITY_ORIGIN'),
+                ('env file /private/secret-value/.env.production not found: no such file or directory', 'missing_environment_file'),
+                ('validating manifest: services.app.environment.BAD must be a string, got secret-value', 'invalid_compose_field=services.app.environment.BAD'),
+                ('yaml: line 32: invalid content secret-value', 'invalid_yaml_line=32'),
+                ('secret-value permission denied', 'permission_denied'),
+                ('unknown error secret-value', 'unclassified')]:
+            with self.subTest(stderr=stderr):
+                error = install.command_failure(('docker', 'compose', 'config'), SimpleNamespace(stderr=stderr, returncode=1))
+                self.assertIn('docker compose rc=1', str(error))
+                self.assertIn(expected, str(error))
+                self.assertNotIn('secret-value', str(error))
+
     def test_same_deployment_lock_acquired_before_install(self):
         order = []
         with patch.object(install.os, 'geteuid', return_value=0), patch.object(install.os, 'umask'), \
