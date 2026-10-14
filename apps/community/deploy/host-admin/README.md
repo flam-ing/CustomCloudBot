@@ -95,9 +95,9 @@ A completed invocation returns HTTP 200 even for a nonzero command exit status:
 `stdout` plus `stderr` are capped at a combined 16,384 raw bytes and decoded as
 UTF-8 with replacement. Additional output is drained and discarded, not written
 to disk or journal. Timed-out commands have `exitCode: 124` and `timedOut: true`.
-The broker launches `/bin/bash --noprofile --norc -lc` with fixed PATH, HOME,
+The broker launches `/bin/bash --noprofile --norc -c` with fixed PATH, HOME,
 USER, LOGNAME and LANG only. It does not inherit service secrets or source shell
-profiles. Root commands can still intentionally read any host file.
+profiles or login/logout hooks. Root commands can still intentionally read any host file.
 
 Error statuses include 400 invalid request, 403 peer/actor denied, 409 request ID
 already seen, 503 executor busy/unavailable. At most four commands run at once.

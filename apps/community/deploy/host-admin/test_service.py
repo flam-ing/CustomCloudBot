@@ -164,8 +164,13 @@ class HttpTests(unittest.TestCase):
 
     def post(self, body):
         with contextlib.closing(UnixConnection(self.path)) as connection:
-            connection.request('POST', '/execute', json.dumps(body), {'Content-Type': 'application/json'})
-            response = connection.getresponse()
+            connection.connect()
+            payload = json.dumps(body).encode()
+            headers = (f'POST /execute HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n'
+                       f'Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n').encode()
+            connection.sock.sendall(headers + payload)
+            response = http.client.HTTPResponse(connection.sock)
+            response.begin()
             return response.status, json.loads(response.read())
 
     def test_health_and_fast_command(self):

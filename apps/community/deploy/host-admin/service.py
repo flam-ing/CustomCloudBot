@@ -174,7 +174,7 @@ def execute(request, is_disconnected=lambda: False):
     timed_out = cancelled = truncated = stopped = False
     # Profiles are disabled: a command does not inherit the service environment or
     # accidentally source root profile credentials. Explicit host access remains root.
-    process = subprocess.Popen(['/bin/bash', '--noprofile', '--norc', '-lc', request['command']],
+    process = subprocess.Popen(['/bin/bash', '--noprofile', '--norc', '-c', request['command']],
                                cwd=request['cwd'], env=ENV.copy(), stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     selector = selectors.DefaultSelector()
