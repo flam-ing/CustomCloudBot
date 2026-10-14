@@ -3,7 +3,6 @@
 import importlib.machinery
 import importlib.util
 import fcntl
-import difflib
 import json
 import os
 from pathlib import Path
@@ -93,14 +92,17 @@ def validate_compose(run, compose, phase):
         raise RuntimeError(phase + ' application compose validation failed: ' + str(error)) from None
 
 
-def mapping_block(lines, key, indent):
+def mapping_block(lines, key, indent, allow_indentless_sequence=False):
     starts = [i for i, line in enumerate(lines) if re.match(r'^' + ' ' * indent + re.escape(key) + r':', line)]
     if len(starts) != 1 or lines[starts[0]].rstrip() != ' ' * indent + key + ':':
         raise ValueError('Expected one block mapping: ' + key)
     start = starts[0]
     end = next((i for i in range(start + 1, len(lines)) if lines[i].strip()
                 and not lines[i].lstrip().startswith('#')
-                and len(lines[i]) - len(lines[i].lstrip(' ')) <= indent), len(lines))
+                and len(lines[i]) - len(lines[i].lstrip(' ')) <= indent
+                and not (allow_indentless_sequence
+                         and len(lines[i]) - len(lines[i].lstrip(' ')) == indent
+                         and lines[i].lstrip(' ').startswith('- '))), len(lines))
     return start, end
 
 
@@ -117,7 +119,7 @@ def patch_manifest(source, owner_id):
     end += service_start + 1
     app = lines[start:end]
     env_start, env_end = mapping_block(app, 'environment', 4)
-    mapping_block(app, 'volumes', 4)
+    mapping_block(app, 'volumes', 4, allow_indentless_sequence=True)
     names = []
     for line in app[env_start + 1:env_end]:
         if not line.strip() or line.lstrip().startswith('#'):
@@ -143,40 +145,26 @@ def patch_manifest(source, owner_id):
             if len(position) != 1:
                 raise ValueError('Expected environment mapping')
             app.insert(position[0] + 1, entry)
-    volume_start, volume_end = mapping_block(app, 'volumes', 4)
+    volume_start, volume_end = mapping_block(app, 'volumes', 4, allow_indentless_sequence=True)
     mounts = []
+    volume_indents = set()
     for line in app[volume_start + 1:volume_end]:
         if not line.strip() or line.lstrip().startswith('#'):
             continue
-        if not re.match(r'^      - \S', line):
+        match = re.match(r'^( {4}| {6})- \S', line)
+        if not match:
             raise ValueError('Expected simple volume list')
+        volume_indents.add(len(match[1]))
         if '/run/community-admin' in line:
             mounts.append(line.strip())
+    if len(volume_indents) > 1:
+        raise ValueError('Mixed volume sequence indentation')
     if not mounts:
-        app.insert(volume_start + 1, '      - /run/community-admin:/run/community-admin:ro,z\n')
+        volume_indent = next(iter(volume_indents), 6)
+        app.insert(volume_start + 1, ' ' * volume_indent + '- /run/community-admin:/run/community-admin:ro,z\n')
     elif mounts != ['- /run/community-admin:/run/community-admin:ro,z']:
         raise ValueError('Unexpected admin mount')
     return ''.join(lines[:start] + app + lines[end:])
-
-
-def changed_manifest_structure(source, updated):
-    """Only changed lines and adjacent indentation/keys; never scalar values."""
-    before = source.splitlines(keepends=True)
-    after = updated.splitlines(keepends=True)
-    selected = set()
-    for tag, _a, _b, start, end in difflib.SequenceMatcher(a=before, b=after, autojunk=False).get_opcodes():
-        if tag != 'equal':
-            selected.update(range(max(0, start - 2), min(len(after), end + 2)))
-    rows = []
-    for index in sorted(selected)[:60]:
-        line = after[index]
-        stripped = line.strip()
-        key = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_-]{0,100}):(?:\s|$)', line)
-        kind = ('blank' if not stripped else 'comment' if stripped.startswith('#') else
-                'key=' + key[1] if key else 'list-item' if stripped.startswith('- ') else 'scalar')
-        rows.append({'line': index + 1, 'indent': len(line) - len(line.lstrip(' ')),
-                     'structure': kind, 'ending': 'CRLF' if line.endswith('\r\n') else 'LF' if line.endswith('\n') else 'none'})
-    return rows
 
 
 def write_root(path, content, mode=0o600):
@@ -331,11 +319,7 @@ def install_locked():
         write_root(paths[1], json.dumps({'user_ids':[owner_id], 'peer_uid':1000, 'socket_path':SOCKET}))
         write_root(paths[2], (HERE / 'community-host-admin.service').read_bytes(), 0o644)
         write_root(manifest, updated)
-        try:
-            validate_compose(run, compose, 'Updated')
-        except RuntimeError:
-            print('Updated compose changed-line structure: ' + json.dumps(changed_manifest_structure(original.decode(), updated)), flush=True)
-            raise
+        validate_compose(run, compose, 'Updated')
         run('systemctl', 'daemon-reload')
         service_touched = True
         run('systemctl', 'enable', 'community-host-admin.service')

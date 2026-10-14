@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import stat
 import tempfile
@@ -33,15 +35,27 @@ volumes:
 
 
 class ManifestTests(unittest.TestCase):
-    def test_changed_structure_only_reports_indents_keys_and_line_numbers(self):
-        changed = install.patch_manifest(FIXTURE, OWNER)
-        structure = install.changed_manifest_structure(FIXTURE, changed)
-        rendered = json.dumps(structure)
-        self.assertNotIn(OWNER, rendered)
-        self.assertNotIn('${PRIVATE_VALUE}', rendered)
-        self.assertNotIn('example-data', rendered)
-        self.assertIn('COMMUNITY_HOST_ADMIN_USER_IDS', rendered)
-        self.assertTrue(all(set(row) == {'line', 'indent', 'structure', 'ending'} for row in structure))
+    def test_indentless_volume_sequence_preserved_and_idempotent(self):
+        source = FIXTURE.replace('      - example-data:/data', '    - example-data:/data\n    - /private/folder:/shared:ro')
+        changed = install.patch_manifest(source, OWNER)
+        self.assertIn('    volumes:\n    - /run/community-admin:/run/community-admin:ro,z\n    - example-data:/data', changed)
+        self.assertIn('    - /private/folder:/shared:ro\n    read_only: true', changed)
+        self.assertEqual(install.patch_manifest(changed, OWNER), changed)
+        self.assertEqual(source.split('  desktop:')[1], changed.split('  desktop:')[1])
+
+    def test_mixed_volume_sequence_indentation_rejected(self):
+        source = FIXTURE.replace('      - example-data:/data', '    - example-data:/data\n      - /private/folder:/shared:ro')
+        with self.assertRaisesRegex(ValueError, 'Mixed volume sequence indentation'):
+            install.patch_manifest(source, OWNER)
+
+    @unittest.skipUnless(shutil.which('ruby'), 'Ruby YAML parser is not installed')
+    def test_generated_manifests_parse_with_yaml_parser_for_both_sequence_styles(self):
+        for source in [FIXTURE, FIXTURE.replace('      - example-data:/data', '    - example-data:/data')]:
+            for document in [source, install.patch_manifest(source, OWNER)]:
+                with self.subTest(indentless='    - example-data' in document):
+                    parsed = subprocess.run([shutil.which('ruby'), '-rpsych', '-e', 'Psych.parse(STDIN.read)'],
+                                            input=document, text=True, capture_output=True, timeout=10)
+                    self.assertEqual(parsed.returncode, 0, parsed.stderr)
 
     def test_idempotent_and_preserves_unrelated_settings(self):
         changed = install.patch_manifest(FIXTURE, OWNER)
