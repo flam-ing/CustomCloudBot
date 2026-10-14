@@ -102,15 +102,30 @@ def write_root(path, content, mode=0o600):
 
 
 def unit_state():
+    def unexpected(option, result):
+        value = result.stdout.strip()
+        known = {'loaded', 'not-found', 'masked', 'masked-runtime', 'error', 'bad-setting', 'stub',
+                 'merged', 'enabled', 'enabled-runtime', 'disabled', 'static', 'indirect', 'linked',
+                 'linked-runtime', 'generated', 'transient', 'alias', 'active', 'inactive', 'unknown',
+                 'failed', 'activating', 'deactivating', 'reloading', 'maintenance'}
+        display = value if value in known else '<empty>' if not value else '<unexpected>'
+        return RuntimeError(f'Unsupported existing service state: {option} state={display} rc={result.returncode}')
+
+    load = subprocess.run(['systemctl', 'show', '--property=LoadState', '--value', SERVICE],
+                          capture_output=True, text=True, timeout=10)
+    if load.returncode != 0 or load.stdout.strip() not in {'loaded', 'not-found'}:
+        raise unexpected('LoadState', load)
+    if load.stdout.strip() == 'not-found':
+        # is-enabled for missing units varies between systemd versions (rc1/rc4,
+        # sometimes no stdout). Successful LoadState is the authoritative check.
+        return {'enabled': False, 'active': False}
     values = []
-    for option, allowed in [('is-enabled', {'enabled', 'disabled', 'not-found'}),
-                            ('is-active', {'active', 'inactive', 'unknown'})]:
+    for option, allowed in [('is-enabled', {'enabled', 'disabled'}),
+                            ('is-active', {'active', 'inactive'})]:
         result = subprocess.run(['systemctl', option, SERVICE], capture_output=True, text=True, timeout=10)
         value = result.stdout.strip()
-        if option == 'is-enabled' and not value and result.returncode == 4:
-            value = 'not-found'
         if value not in allowed:
-            raise RuntimeError('Unsupported existing service state: ' + option)
+            raise unexpected(option, result)
         values.append(value)
     return {'enabled': values[0] == 'enabled', 'active': values[1] == 'active'}
 

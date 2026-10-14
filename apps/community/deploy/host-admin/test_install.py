@@ -142,12 +142,37 @@ class BoundaryTests(unittest.TestCase):
                         install.verify_app_uid(run, 'example-app-1')
 
     def test_service_state_capture_and_unsupported_state_rejection(self):
-        with patch.object(install.subprocess, 'run', side_effect=[SimpleNamespace(stdout='enabled\n', returncode=0),
+        with patch.object(install.subprocess, 'run', side_effect=[SimpleNamespace(stdout='loaded\n', returncode=0),
+                                                                SimpleNamespace(stdout='enabled\n', returncode=0),
                                                                 SimpleNamespace(stdout='active\n', returncode=0)]):
             self.assertEqual(install.unit_state(), {'enabled': True, 'active': True})
         with patch.object(install.subprocess, 'run', return_value=SimpleNamespace(stdout='masked\n', returncode=1)):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, 'LoadState state=masked rc=1'):
                 install.unit_state()
+
+    def test_missing_unit_checked_independently_of_systemd_enabled_exit_variant(self):
+        for enabled_returncode in (1, 4):
+            def result(args, **_kwargs):
+                if args[1] == 'show':
+                    return SimpleNamespace(stdout='not-found\n', returncode=0)
+                if args[1] == 'is-enabled':
+                    return SimpleNamespace(stdout='', returncode=enabled_returncode)
+                raise AssertionError('Missing unit must not query active state')
+            with self.subTest(enabled_returncode=enabled_returncode), patch.object(install.subprocess, 'run', side_effect=result) as run:
+                self.assertEqual(install.unit_state(), {'enabled': False, 'active': False})
+                run.assert_called_once_with(['systemctl', 'show', '--property=LoadState', '--value', install.SERVICE],
+                                            capture_output=True, text=True, timeout=10)
+
+    def test_failed_or_unknown_load_state_fails_closed_with_safe_diagnostic(self):
+        for stdout, returncode, diagnostic in [('not-found\n', 1, 'state=not-found rc=1'),
+                                                ('\n', 1, 'state=<empty> rc=1'),
+                                                ('sensitive-unexpected-value\n', 0, 'state=<unexpected> rc=0')]:
+            with self.subTest(stdout=stdout), patch.object(install.subprocess, 'run',
+                    return_value=SimpleNamespace(stdout=stdout, returncode=returncode)):
+                with self.assertRaises(RuntimeError) as caught:
+                    install.unit_state()
+                self.assertIn(diagnostic, str(caught.exception))
+                self.assertNotIn('sensitive-unexpected-value', str(caught.exception))
 
 
 if __name__ == '__main__':
