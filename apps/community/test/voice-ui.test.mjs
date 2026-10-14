@@ -219,3 +219,13 @@ test('message retries are bounded and never repeat rejected, aborted or timed-ou
     assert.equal(app.stage, 'ended'); assert.equal(app.spoken.length, 0); assert.equal(app.timers.size, 0);
   }
 });
+
+test('a superseded microphone acquisition rejection cannot end the replacement capture', async () => {
+  const pending = deferred(); let acquisitions = 0;
+  const app = setup({acquire: create => ++acquisitions === 1 ? pending.promise : Promise.resolve(create())});
+  await app.start(); app.click('.voice-mute'); app.click('.voice-mute'); await tick();
+  assert.equal(app.stage, 'listening'); assert.equal(app.recorders.at(-1).state, 'recording');
+  pending.reject(new DOMException('old permission request failed', 'NotAllowedError')); await tick();
+  assert.equal(app.ui.roomId, 'one'); assert.equal(app.stage, 'listening');
+  assert.equal(app.recorders.at(-1).state, 'recording'); app.ui.reset();
+});

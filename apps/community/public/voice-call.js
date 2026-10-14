@@ -150,10 +150,13 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
     const canCapture = () => current(call) && call.captureVersion === captureVersion && !call.muted;
     if (call.muted) { renderStage("muted", "마이크가 꺼져 있어요"); return; }
     renderStage("connecting", "마이크 연결 중");
-    const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}, video:false});
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}, video:false}); }
+    catch (error) { if (canCapture()) throw error; return; }
     if (!canCapture()) { stream.getTracks().forEach(track => track.stop()); return; }
     call.stream = stream;
-    await call.context.resume();
+    try { await call.context.resume(); }
+    catch (error) { if (canCapture()) throw error; stream.getTracks().forEach(track => track.stop()); return; }
     if (!canCapture()) { stream.getTracks().forEach(track => track.stop()); return; }
     const source = call.context.createMediaStreamSource(stream), analyser = call.context.createAnalyser();
     analyser.fftSize = 2048; source.connect(analyser); call.source = source;
