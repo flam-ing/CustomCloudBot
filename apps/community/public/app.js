@@ -14,6 +14,7 @@ import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
 import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
+import { createMessageQueue } from "/message-queue.js";
 import { suggestTopicSwitch } from "/topic-switch.mjs";
 const inviteLinks = createInviteLinks();
 
@@ -53,6 +54,7 @@ let profileUI;
 let sharingUI;
 let routineUI;
 let voiceUI;
+let messageQueueUI;
 const topicPrompts = new Set();
 const pendingMessages = new Map();
 const presenceTurns = new Map();
@@ -213,6 +215,8 @@ async function loadSession() {
 $("#startup-retry").addEventListener("click", loadSession);
 function showAuth() {
   voiceUI?.reset();
+  messageQueueUI?.reset();
+  messageQueueUI?.render($("#composer-form"), null);
   agentPresence?.reset(); presenceErrors.clear(); presenceTurns.clear(); pendingMessages.clear(); notificationUI?.reset();
   profileUI?.close(); sharingUI?.close();
   setupUI?.reset();
@@ -629,6 +633,7 @@ async function selectRoom(id) {
     sessionStorage.setItem("community-room:" + state.session.user.id, id);
   } catch {}
   state.roomData = null;
+  messageQueueUI?.render($("#composer-form"), id);
   syncProgressStreams();
   cancelActiveRecording();
   clearPendingAttachments();
@@ -782,6 +787,7 @@ function paintPending(roomId) {
 function renderRoom(data) {
   if(data.room) {const room=state.rooms.find(r=>r.id===data.room.id);if(room&&room.name!==data.room.name){room.name=data.room.name;els.roomTitle.textContent=room.name;renderRooms();}}
   renderContextMeter(data.context);
+  messageQueueUI?.render($("#composer-form"), data.room.id, data.queue);
   const previousNodes=new Map([...els.messages.children].filter(el=>el.dataset.messageId).map(el=>[el.dataset.messageId,el]));
   els.messages.replaceChildren();
   const messages = mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id));
@@ -1302,7 +1308,7 @@ function topicChoiceDialog() {
 // A conservative local suggestion keeps ordinary sends instant and never changes a room by itself.
 async function offerTopicChoice(pane,draft) {
   const {roomId,data}=roomContextOwner(pane),userId=state.session?.user?.id;
-  if(!data || data.room?.pendingTitle || roomId===MONITOR_ROOM || !suggestTopicSwitch({history:data.messages,draft}).suggest)return false;
+  if(data?.busy || !data || data.room?.pendingTitle || roomId===MONITOR_ROOM || !suggestTopicSwitch({history:data.messages,draft}).suggest)return false;
   topicPrompts.add(roomId);
   const model=pane?.model??$("#model-select").value,effort=pane?.effort??$("#effort-select").value;
   const current=()=>contextOwnerCurrent(roomId,userId,pane);
@@ -1333,7 +1339,7 @@ async function offerTopicChoice(pane,draft) {
 }
 async function submitMessage(event, skipTopic = false) {
   event.preventDefault();
-  if (!state.selectedRoom || roomContextOwner().busy) return;
+  if (composerBlocked()) return;
   const input = $("#message-input"),
     text = input.value.trim();
   const attachments = state.pendingAttachments.filter((item) => item.attachment && !item.error);
@@ -1346,9 +1352,10 @@ async function submitMessage(event, skipTopic = false) {
   }
   if(topicPrompts.has(roomId))return;
   if(!skipTopic && !attachments.length && await offerTopicChoice(null,text))return;
-  if(state.selectedRoom!==roomId || roomContextOwner().busy)return;
+  if(state.selectedRoom!==roomId || composerBlocked())return;
   const attachmentIds = attachments.map((item) => item.attachment.id);
-  const signature = JSON.stringify({ roomId, text, botIds, attachmentIds });
+  const model = $("#model-select").value, effort = $("#effort-select").value;
+  const signature = JSON.stringify({ roomId, text, botIds, attachmentIds, model, effort });
   if (state.pendingSend?.signature !== signature)
     state.pendingSend = { signature, nonce: crypto.randomUUID() };
   const payload = JSON.stringify({
@@ -1356,8 +1363,9 @@ async function submitMessage(event, skipTopic = false) {
     botIds,
     attachmentIds,
     clientNonce: state.pendingSend.nonce,
-    model: $("#model-select").value,
-    effort: $("#effort-select").value,
+    model,
+    effort,
+    queueIfBusy: true,
   });
   const sendUserId=state.session?.user?.id;
   presenceErrors.delete(roomId);
@@ -1366,7 +1374,7 @@ async function submitMessage(event, skipTopic = false) {
   $("#send-button").disabled = true;
   input.disabled = true;
   input.value=""; input.style.height="";
-  const pending=await optimisticMessage(roomId,text,state.pendingSend.nonce,attachments.map(item=>item.attachment));
+  const pending = state.roomData?.busy ? null : await optimisticMessage(roomId,text,state.pendingSend.nonce,attachments.map(item=>item.attachment));
   let accepted=false;
   try {
     const result = await api(`/api/rooms/${encodeURIComponent(roomId)}/messages`, {
@@ -1376,7 +1384,9 @@ async function submitMessage(event, skipTopic = false) {
     });
     accepted=true;
     if(state.session?.user?.id!==sendUserId)return;
+    if(result.queued && pendingMessages.get(roomId)===pending)pendingMessages.delete(roomId);
     if(result.messageId && pending)pending.id=result.messageId;
+    if(result.queued)paintPending(roomId);
     if (Array.isArray(result.models)) applyModels(result.models);
     state.pendingSend = null;
     if(state.selectedRoom===roomId)clearPendingAttachments();
@@ -1736,6 +1746,10 @@ function saveRoomPreferences(id, prefs) {
   if (!id) return;
   try { localStorage.setItem("community-model:" + state.session.user.id + ":" + id, JSON.stringify(prefs)); } catch {}
 }
+function composerBlocked(pane = null) {
+  const {roomId} = roomContextOwner(pane);
+  return !roomId || roomId === MONITOR_ROOM || (pane ? pane.sending : state.sending) || modelChanges.has(roomId) || branchOperations.has(roomId);
+}
 function updateModelAvailability() {
   updateBranchControls();
   updateAgentPresence();
@@ -1747,7 +1761,11 @@ function updateModelAvailability() {
     if(select._moreButton)select._moreButton.disabled=disabled||!state.models.length;
     const form=select.closest("form");
     if(form) {
-      const send=$('button[type="submit"]',form);if(send)send.disabled=disabled;
+      const send=$('button[type="submit"]',form);
+      const blocked=composerBlocked(pane), queued=!!owner.data?.busy;
+      if(send){send.disabled=blocked;send.setAttribute("aria-label",queued?"대기열에 추가":"메시지 보내기");send.title=queued?"대기열에 추가 · 현재 답변이 끝나면 순서대로 보냅니다":"메시지 보내기";}
+      const input=$("textarea",form);
+      if(input){input.disabled=!!blocked;if(!input.dataset.idlePlaceholder)input.dataset.idlePlaceholder=input.placeholder;input.placeholder=queued?"다음 요청을 입력하세요. Enter를 누르면 대기열에 추가됩니다.":input.dataset.idlePlaceholder;}
       const actions=$$(".context-action",form);
       if(actions[0])actions[0].disabled=owner.busy;
       if(actions[1])actions[1].disabled=owner.busy||!owner.canManage||!(owner.data?.context?.usedChars>=500);
@@ -1995,6 +2013,7 @@ function renderExtraPanes() {
     row.append(input, send);
     form.append(controls, row);
     renderContextMeter(pane.data?.context,form,pane);
+    messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
     grid.append(section);
 
@@ -2034,7 +2053,7 @@ function effortSelect(pane) {
 async function submitPane(event, index, skipTopic = false) {
   event.preventDefault();
   const pane = state.extra[index];
-  if (!pane?.roomId || roomContextOwner(pane).busy) return;
+  if (!pane || composerBlocked(pane)) return;
   const form = event.currentTarget;
   const input = $("textarea", form);
   const text = input.value.trim();
@@ -2042,32 +2061,28 @@ async function submitPane(event, index, skipTopic = false) {
   const roomId=pane.roomId,userId=state.session?.user?.id;
   if(topicPrompts.has(roomId))return;
   if(!skipTopic && await offerTopicChoice(pane,text))return;
-  if(!contextOwnerCurrent(roomId,userId,pane)||roomContextOwner(pane).busy)return;
+  if(!contextOwnerCurrent(roomId,userId,pane)||composerBlocked(pane))return;
   const signature=JSON.stringify({roomId,text,model:pane.model,effort:pane.effort});
   if(pane.pendingSend?.signature!==signature)pane.pendingSend={signature,nonce:crypto.randomUUID()};
   const nonce=pane.pendingSend.nonce;
+  const payload=JSON.stringify({text,botIds:[...state.selectedBots],attachmentIds:[],clientNonce:nonce,model:$(".model-select",form).value,effort:$(".effort-select",form).value,queueIfBusy:true});
   presenceErrors.delete(roomId);
   pane.sending = true;
   updateModelAvailability();
   input.value=""; pane.draft="";input.disabled=true;
-  const pending=await optimisticMessage(roomId,text,nonce);
+  const pending=pane.data?.busy ? null : await optimisticMessage(roomId,text,nonce);
   let accepted=false;
   try {
     const result = await api(`/api/rooms/${encodeURIComponent(roomId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({
-        text,
-        botIds: state.selectedBots,
-        attachmentIds: [],
-        clientNonce: nonce,
-        model: $(".model-select", form).value,
-        effort: $(".effort-select", form).value,
-      }),
+      body: payload,
       retryable: true,
     });
     accepted=true;
     if(state.session?.user?.id!==userId)return;
+    if(result.queued && pendingMessages.get(roomId)===pending)pendingMessages.delete(roomId);
     if(result.messageId&&pending)pending.id=result.messageId;
+    if(result.queued)paintPending(roomId);
     pane.pendingSend=null;
     if (Array.isArray(result.models)) applyModels(result.models);
     await refreshExtra(index);
@@ -2103,6 +2118,7 @@ async function refreshExtra(index) {
     const section = $$(".extra-pane")[index];
     if (!section) return;
     renderContextMeter(data.context,$(".pane-composer",section),pane);
+    messageQueueUI?.render($(".pane-composer",section), roomId, data.queue);
     const list = $(".message-list", section);
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 90;
     list.replaceChildren();
@@ -2316,6 +2332,12 @@ pwaUI = createPwaController({ api, getSession: () => state.session, toast });
 desktopUI = createDesktopUI({ api, getRoomId: () => state.selectedRoom, getRoomName: id => state.rooms.find(room=>room.id===id)?.name || "대화", toast });
 profileUI = createProfileSettings({api,getSession:()=>state.session,toast,onSaved: user=>{state.session.user=user;$("#profile-name").textContent=user.displayName;$("#profile-avatar").textContent=initials(user.displayName);$("#profile-avatar").style.backgroundColor=user.avatarColor || "";}});
 routineUI = createRoutineUI({api,getSession:()=>state.session,getRoom:()=>state.rooms.find(room=>room.id===currentBranchId()),toast,onChanged:async()=>{await refreshRoom(true);await loadRooms();refreshExtras();}});
+messageQueueUI = createMessageQueue({api, getSession:()=>state.session, toast, onRefresh:async roomId=>{
+  const tasks=[];
+  if(state.selectedRoom===roomId)tasks.push(refreshRoom(true));
+  state.extra.forEach((pane,index)=>{if(pane.roomId===roomId)tasks.push(refreshExtra(index));});
+  await Promise.all(tasks);
+}});
 voiceUI = createVoiceCall({api,getSession:()=>state.session,getRoom:id=>state.rooms.find(room=>room.id===id),toast,
   beforeStart:cancelActiveRecording,
   getSelection:id=>{
