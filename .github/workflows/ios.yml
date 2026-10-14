@@ -1,0 +1,28 @@
+name: iOS
+
+on:
+  push:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Check session routing and Swift syntax
+        run: sh apps/ios/scripts/check.sh
+      - name: Compile against the iOS SDK without signing
+        run: sh apps/ios/scripts/build.sh

@@ -273,6 +273,7 @@ function showAuth() {
   else { switchAuth("login"); if (inviteLinks.get("room")) showMessage(els.authMessage, "대화 초대를 받았습니다. 로그인하면 참여할 수 있습니다.", "info"); }
 }
 async function enterWorkspace() {
+  voiceUI?.syncSession();
   applyBrand(state.session.brand);
   els.auth.classList.add("is-hidden");
   els.workspace.classList.remove("is-hidden");

@@ -1,21 +1,22 @@
 name: CustomCloudBot
 options:
   bundleIdPrefix: org.example
+  xcodeVersion: "16.0"
   deploymentTarget:
     iOS: "16.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: targeted
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: ""
-    # Set these in Xcode or a private local xcconfig; no deployment identity is committed.
-    PRODUCT_BUNDLE_IDENTIFIER: org.example.customcloudbot
-    CLOUDBOT_ORIGIN: ""
 targets:
   CustomCloudBot:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Config.xcconfig
+      Release: Config.xcconfig
     sources: [Sources]
     info:
       path: Info.plist
@@ -29,7 +30,7 @@ targets:
         UIBackgroundModes: [audio]
         CloudBotOrigin: $(CLOUDBOT_ORIGIN)
         CFBundleURLTypes:
-          - CFBundleURLName: org.example.customcloudbot.call
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER).call
             CFBundleURLSchemes: [customcloudbot]
         NSUserActivityTypes: [INStartCallIntent, INStartAudioCallIntent]
         UISupportedInterfaceOrientations:

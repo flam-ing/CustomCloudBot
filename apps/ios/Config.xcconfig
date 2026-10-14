@@ -1,0 +1,6 @@
+// Public defaults for forks. Personal settings belong in the ignored local file.
+PRODUCT_BUNDLE_IDENTIFIER = org.example.customcloudbot
+DEVELOPMENT_TEAM =
+CLOUDBOT_ORIGIN =
+
+#include? "Config.local.xcconfig"

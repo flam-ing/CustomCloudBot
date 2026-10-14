@@ -19,6 +19,7 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   const startButton = find(".voice-start"), muteButton = find(".voice-mute"), sendButton = find(".voice-send"), endButton = find(".voice-end");
   let target = null, active = null, nativeWait = null;
   const nativeBridge = () => window.webkit?.messageHandlers?.cloudbotCall;
+  const nativeAudio = () => !!nativeBridge() && window.cloudbotNativeVoice?.version >= 2;
   function native(action, extra = {}) {
     if (active?.native) nativeBridge()?.postMessage({action, roomId:active.roomId, roomTitle:active.title, ...extra});
   }
@@ -37,6 +38,24 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   }
   function show() { if (!dialog.open) dialog.showModal(); pill.hidden = true; }
   function minimize() { dialog.close(); pill.hidden = !active; }
+  function updateNote() {
+    find(".voice-call-note").textContent = nativeAudio()
+      ? "말하면 이 대화에 전송되고, 답변을 음성으로 들려드려요. 아이폰 화면을 꺼도 통화는 이어집니다."
+      : "말하면 이 대화에 전송되고, 답변을 음성으로 들려드려요. 웹 통화 중에는 이 앱을 화면에 열어두세요.";
+  }
+  function showControls() {
+    startButton.hidden = true; muteButton.hidden = sendButton.hidden = endButton.hidden = false;
+    document.querySelectorAll(".voice-call-button").forEach(button => button.classList.add("is-active"));
+  }
+  function startClock(call) {
+    clearInterval(call.clock);
+    const update = () => {
+      if (!current(call) || !call.startedAt) return;
+      const seconds = Math.max(0, Math.floor((Date.now() - call.startedAt) / 1000));
+      find(".voice-call-time").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,"0")}`;
+    };
+    update(); call.clock = setInterval(update, 1000);
+  }
   function refreshTitle(call, name) {
     if (!name || !current(call) || call.title === name) return;
     call.title = name; title.textContent = name; native("title");
@@ -57,7 +76,8 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
       if (notifyNative) native("end");
       active = null;
       call.controller.abort(); releaseCapture(call); clearInterval(call.clock);
-      call.context?.close().catch(() => {}); window.speechSynthesis?.cancel();
+      call.context?.close().catch(() => {});
+      if (!call.nativeAudio) window.speechSynthesis?.cancel();
       nativeWait?.reject(new Error("통화가 종료됐어요.")); nativeWait = null;
     }
     startButton.hidden = false; startButton.disabled = false; startButton.textContent = "통화 시작";
@@ -186,23 +206,29 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   }
   async function start() {
     if (active || !target || !getSession()?.user) return;
-    if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia || !(window.AudioContext || window.webkitAudioContext) || !window.speechSynthesis) {
+    const usesNativeAudio = nativeAudio();
+    if (!usesNativeAudio && (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia || !(window.AudioContext || window.webkitAudioContext) || !window.speechSynthesis)) {
       renderStage("error", "이 브라우저에서는 통화를 지원하지 않아요. 최신 Safari 또는 Chrome을 사용해 주세요."); return;
     }
     const selection = getSelection(target.id);
-    if (!selection.botIds?.length) { renderStage("error", "응답할 봇 연결을 먼저 확인해 주세요."); return; }
+    if (!usesNativeAudio && !selection.botIds?.length) { renderStage("error", "응답할 봇 연결을 먼저 확인해 주세요."); return; }
     beforeStart();
-    const call = {id:crypto.randomUUID(), roomId:target.id, title:target.name, userId:getSession().user.id, controller:new AbortController(), turn:0, muted:false, ready:false, native:!!nativeBridge(), ...selection};
+    const call = {id:crypto.randomUUID(), roomId:target.id, title:target.name, userId:getSession().user.id, controller:new AbortController(), turn:0, muted:false, ready:false, native:!!nativeBridge(), nativeAudio:usesNativeAudio, ...selection};
     active = call;
+    updateNote(); showControls();
+    renderStage("connecting", "통화를 연결하고 있어요");
+    if (call.nativeAudio) {
+      // CallKit owns capture, networking and speech. This page only displays its state.
+      // A suspended/reloaded WebView cannot interrupt or duplicate an utterance.
+      native("start", {model:call.model, effort:call.effort});
+      return;
+    }
     if (!call.native) {
       call.context = new (window.AudioContext || window.webkitAudioContext)();
       // Unlock browser output during Start; native audio waits for CallKit activation.
       void call.context.resume().catch(() => {});
       const unlock = new SpeechSynthesisUtterance(" "); speechSynthesis.speak(unlock);
     }
-    startButton.hidden = true; muteButton.hidden = sendButton.hidden = endButton.hidden = false;
-    document.querySelectorAll(".voice-call-button").forEach(button => button.classList.add("is-active"));
-    renderStage("connecting", "통화를 연결하고 있어요");
     try {
       const [capability, data] = await Promise.all([api("/api/voice", {signal:requestSignal(call)}), api(`/api/rooms/${call.roomId}`, {signal:requestSignal(call)})]);
       if (!current(call)) return;
@@ -224,10 +250,11 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
       if (!current(call)) return;
       native("connected");
       call.startedAt = Date.now();
-      call.clock = setInterval(() => { if (!current(call)) return; const seconds = Math.floor((Date.now() - call.startedAt) / 1000); find(".voice-call-time").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,"0")}`; }, 1000);
+      startClock(call);
     } catch (error) { fail(call, error); }
   }
   function open(room) {
+    updateNote();
     if (active) { show(); if (room?.id !== active.roomId) toast(`현재 통화는 ‘${active.title}’에 연결되어 있어요.`); return; }
     if (!room || room.archived || room.id === "00000000-0000-4000-8000-000000000001") { toast("전화할 대화를 먼저 선택해 주세요."); return; }
     target = {id:room.id, name:room.name}; title.textContent = room.name; transcript.textContent = ""; find(".voice-call-time").textContent = "이 대화의 이전 내용을 이어서 통화합니다";
@@ -235,9 +262,10 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   }
   startButton.onclick = () => void start();
   endButton.onclick = () => end();
-  sendButton.onclick = () => active?.finishUtterance?.();
+  sendButton.onclick = () => { if (active?.nativeAudio) native("finish"); else active?.finishUtterance?.(); };
   function setMuted(muted) {
     if (!active) return;
+    if (active.nativeAudio) { native("mute", {muted}); return; }
     active.muted = muted;
     if (active.ready && active.muted && ["listening", "connecting"].includes(dialog.dataset.stage)) { releaseCapture(active); renderStage("muted", "마이크가 꺼져 있어요"); }
     else if (active.ready && !active.muted && dialog.dataset.stage === "muted") { const call = active; void listen(call).catch(error => fail(call,error)); }
@@ -247,19 +275,52 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   find(".voice-minimize").onclick = minimize; pill.onclick = show;
   dialog.addEventListener("cancel", event => { event.preventDefault(); minimize(); });
   find(".voice-call-link").onclick = async () => { try { await navigator.clipboard.writeText(callLink(location.origin, active?.roomId || target.id)); toast("통화 링크를 복사했어요. 대화 참여자만 연결할 수 있어요."); } catch { toast("링크를 복사하지 못했어요."); } };
-  window.addEventListener("pagehide", () => end());
+  window.addEventListener("pagehide", () => { if (!active?.nativeAudio) end(); });
   document.addEventListener("visibilitychange", () => {
+    if (nativeAudio()) { if (!document.hidden) nativeBridge().postMessage({action:"status"}); return; }
     // Browsers suspend timers/audio in the background: never keep a hidden microphone active.
     if (document.hidden && active) { end("앱이 화면에서 벗어나 통화를 종료했어요. 다시 시작해 주세요."); }
   });
   window.addEventListener("cloudbot:native-call", event => {
     const detail = event.detail;
+    if (nativeAudio() && detail?.action === "state") {
+      if (!getSession()?.user) return;
+      if (detail.userId && detail.userId !== getSession().user.id) return;
+      if (!detail.roomId) { if (active?.nativeAudio) end("통화가 끝났어요.", false); return; }
+      if (active && (active.roomId !== detail.roomId || !current(active))) return;
+      if (!active) {
+        // Reattach display after a page reload only to a server-validated call by this actor.
+        if (["ended", "error"].includes(detail.state) || detail.userId !== getSession().user.id) return;
+        active = {roomId:detail.roomId, title:detail.title || "대화", userId:detail.userId,
+          controller:new AbortController(), native:true, nativeAudio:true, muted:false};
+        target = {id:active.roomId, name:active.title};
+        updateNote(); showControls();
+        pill.hidden = dialog.open;
+      }
+      const call = active;
+      if (detail.title) { call.title = detail.title; title.textContent = detail.title; }
+      if (["ended", "error"].includes(detail.state)) {
+        onMessages(call.roomId); end(detail.text || "통화가 끝났어요.", false); return;
+      }
+      call.muted = !!detail.muted;
+      if (detail.text != null) transcript.textContent = detail.text;
+      const labels = {connecting:"통화를 연결하고 있어요", listening:"듣고 있어요", muted:"마이크가 꺼져 있어요",
+        transcribing:"말씀을 확인하고 있어요", waiting:"대화에 보내고 답변을 기다려요", speaking:"답변을 들려드리고 있어요", paused:"통화를 잠시 기다리고 있어요"};
+      const previous = dialog.dataset.stage;
+      renderStage(detail.state, labels[detail.state] || "통화 중");
+      if (detail.startedAt && call.startedAt !== detail.startedAt) { call.startedAt = detail.startedAt; startClock(call); }
+      if (previous !== detail.state && ["speaking", "listening"].includes(detail.state)) onMessages(call.roomId);
+      return;
+    }
     if (!active?.native || detail?.roomId !== active.roomId) return;
     if (detail.action === "active") { nativeWait?.resolve(); nativeWait = null; }
     if (detail.action === "muted" || detail.action === "unmuted") setMuted(detail.action === "muted");
     if (detail.action === "ended" || detail.action === "error") { nativeWait?.reject(new Error(detail.message || "통화가 종료됐어요.")); nativeWait = null; end(detail.message || "통화가 끝났어요.", false); }
   });
-  return {open, reset:() => { end(); dialog.close(); target = null; transcript.textContent = ""; }, get roomId() { return active?.roomId || null; }, handleLink() {
+  return {open, syncSession:() => { if (nativeAudio() && getSession()?.user) nativeBridge().postMessage({action:"session"}); },
+    reset:() => { if (nativeAudio()) nativeBridge().postMessage({action:"logout"}); end(); dialog.close(); target = null; transcript.textContent = ""; },
+    get roomId() { return active?.roomId || null; }, handleLink() {
+    if (nativeAudio() && getSession()?.user) nativeBridge().postMessage({action:"status"});
     const url = new URL(location.href);
     if (url.searchParams.get("call") !== "1" || !getSession()?.user) return;
     const room = getRoom(url.searchParams.get("room"));

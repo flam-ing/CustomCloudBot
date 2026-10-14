@@ -38,6 +38,7 @@ function setup({apiResult, acquire, resume, native = false} = {}) {
   const speechSynthesis = {cancels: 0, getVoices: () => [{lang: 'ko-KR'}], cancel() { this.cancels++; }, speak(value) { if (!value.text.trim()) return; spoken.push(value); }};
   const window = {handlers: {}, AudioContext, MediaRecorder, speechSynthesis, addEventListener(name, action) { this.handlers[name] = action; }};
   if (native) window.webkit = {messageHandlers: {cloudbotCall: {postMessage: value => nativeMessages.push(value)}}};
+  if (native === 2) window.cloudbotNativeVoice = {version: 2};
   const navigator = {mediaDevices: {getUserMedia: () => acquire ? acquire(stream) : Promise.resolve(stream())}, clipboard: {writeText: async () => {}}};
   const context = {window, document, navigator, location: {origin: 'https://bots.example.org', href: 'https://bots.example.org/'}, history: {replaceState() {}}, callReply, speechText, callLink, createSpeechGate, AudioContext, MediaRecorder, speechSynthesis, SpeechSynthesisUtterance: class {constructor(text) {this.text = text;}}, crypto: {randomUUID: () => `id-${++nonce}`}, AbortController, AbortSignal, DOMException, FormData, Blob, URL, Date, Float32Array, performance: {now: () => now}, setTimeout: (fn, ms) => { timers.set(++timerId, {fn, ms}); return timerId; }, clearTimeout: id => timers.delete(id), setInterval: (fn, ms) => { timers.set(++timerId, {fn, ms, interval: true}); return timerId; }, clearInterval: id => timers.delete(id)};
   vm.runInNewContext(source + '\nthis.createVoiceCall = createVoiceCall;', context);
@@ -228,4 +229,59 @@ test('a superseded microphone acquisition rejection cannot end the replacement c
   pending.reject(new DOMException('old permission request failed', 'NotAllowedError')); await tick();
   assert.equal(app.ui.roomId, 'one'); assert.equal(app.stage, 'listening');
   assert.equal(app.recorders.at(-1).state, 'recording'); app.ui.reset();
+});
+
+test('native v2 owns all audio and requests; web buttons send only room-bound controls', async () => {
+  const app = setup({native: 2});
+  // Native calling also works when the WebView offers no browser recording or TTS APIs.
+  delete app.window.MediaRecorder; delete app.window.AudioContext; delete app.window.speechSynthesis;
+  await app.start();
+  assert.equal(app.calls.length, 0); assert.equal(app.streams.length, 0); assert.equal(app.contexts.length, 0);
+  assert.equal(app.nativeMessages[0].action, 'start'); assert.equal(app.nativeMessages[0].model, 'selected-model');
+  assert.equal(app.nativeMessages[0].effort, 'high'); assert.equal(app.nativeMessages[0].roomId, 'one');
+  app.emitNative({action: 'state', roomId: 'two', userId: 'owner', state: 'listening'});
+  assert.equal(app.stage, 'connecting');
+  app.emitNative({action: 'state', roomId: 'one', userId: 'owner', title: '서버 관리', state: 'listening', startedAt: Date.now()});
+  assert.equal(app.stage, 'listening'); app.ui.open(app.rooms[1]); assert.equal(app.ui.roomId, 'one');
+  app.click('.voice-send'); assert.equal(app.nativeMessages.at(-1).action, 'finish');
+  app.click('.voice-mute'); assert.equal(app.nativeMessages.at(-1).action, 'mute'); assert.equal(app.nativeMessages.at(-1).muted, true);
+  app.emitNative({action: 'state', roomId: 'one', userId: 'owner', state: 'muted', muted: true});
+  assert.equal(app.node('.voice-mute').textContent, '마이크 켜기');
+  assert.equal(app.recorders.length, 0); assert.equal(app.spoken.length, 0); assert.equal(app.calls.length, 0);
+  app.ui.reset(); assert.equal(app.nativeMessages.some(item => item.action === 'logout'), true); assert.equal(app.timers.size, 0);
+});
+
+test('native v2 survives page hide and lock; foreground asks for authoritative state', async () => {
+  const app = setup({native: 2}); await app.start();
+  app.emitNative({action: 'state', roomId: 'one', userId: 'owner', state: 'listening'});
+  app.document.hidden = true; app.document.handlers.visibilitychange(); app.window.handlers.pagehide();
+  assert.equal(app.ui.roomId, 'one'); assert.equal(app.nativeMessages.some(item => item.action === 'end'), false);
+  app.document.hidden = false; app.document.handlers.visibilitychange();
+  assert.equal(app.nativeMessages.at(-1).action, 'status');
+  app.emitNative({action: 'state', roomId: 'one', userId: 'owner', state: 'speaking', text: '완료했어요.'});
+  assert.equal(app.stage, 'speaking'); assert.equal(app.node('.voice-call-transcript').textContent, '완료했어요.');
+  assert.equal(app.spoken.length, 0); app.click('.voice-end'); assert.equal(app.nativeMessages.at(-1).action, 'end');
+  assert.equal(app.ui.roomId, null); app.ui.reset();
+});
+
+test('native v2 restores a call display after reload only for the authenticated actor', () => {
+  const app = setup({native: 2});
+  const snapshot = {action: 'state', roomId: 'two', userId: 'owner', title: '여행 계획', state: 'listening', startedAt: Date.now()};
+  app.emitNative({...snapshot, userId: 'other'}); assert.equal(app.ui.roomId, null);
+  app.emitNative({...snapshot, userId: undefined}); assert.equal(app.ui.roomId, null);
+  app.setUser(null); app.emitNative(snapshot); assert.equal(app.ui.roomId, null);
+  app.setUser('owner'); app.ui.syncSession(); assert.equal(app.nativeMessages.at(-1).action, 'session');
+  app.emitNative(snapshot); assert.equal(app.ui.roomId, 'two'); assert.equal(app.node('h2').textContent, '여행 계획');
+  assert.equal(app.calls.length, 0); assert.equal(app.streams.length, 0);
+  app.emitNative({action: 'state', roomId: '', state: 'ended'}); assert.equal(app.ui.roomId, null); assert.equal(app.timers.size, 0);
+});
+
+test('native v2 logout ends the native call and ignores late state from the old actor', async () => {
+  const app = setup({native: 2}); await app.start();
+  app.setUser(null); app.ui.reset();
+  assert.equal(app.nativeMessages.some(item => item.action === 'logout'), true);
+  app.emitNative({action: 'state', roomId: 'one', userId: 'owner', state: 'speaking', text: 'private reply'});
+  assert.equal(app.ui.roomId, null); assert.equal(app.node('.voice-call-transcript').textContent, '');
+  app.setUser('other'); app.emitNative({action: 'state', roomId: 'one', userId: 'owner', state: 'listening'});
+  assert.equal(app.ui.roomId, null); assert.equal(app.spoken.length, 0);
 });

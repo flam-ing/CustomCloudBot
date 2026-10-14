@@ -1,108 +1,115 @@
-# CustomCloudBot iOS calling shell
+# CustomCloudBot iOS calls
 
-This is a native iOS shell for the existing CustomCloudBot website. It adds CallKit
-call identity and system controls around the site's **foreground voice conversation**.
-It is not an installed app, an incoming-call service, or proof of reliable locked-screen
-calling. A PWA by itself cannot use this native bridge.
+The native iOS app embeds the existing website for sign-in and chats, and uses
+CallKit plus native audio and networking for voice calls. Calls belong to immutable
+chat room IDs; the system call UI displays the current chat title. Phone Recents
+redial reconnects to that same room after checking the current login and membership.
 
-Each call uses an immutable chat room UUID as its generic CallKit handle and the chat
-title as `localizedCallerName`. Renaming a chat does not change its address. The title
-is shown in system call UI and updated when the website receives a new generated or
-edited title; calls are included in Phone Recents. Tapping
-a supported Recents call opens the same room's call sheet, after normal authentication.
-It does not make a new chat or silently start the microphone. The website remains
-responsible for checking current membership and for rejecting deleted/inaccessible rooms.
+This is an outgoing app-to-agent call. It does not require a telephone number or
+PSTN provider, and it does not implement incoming ringing via PushKit/APNs. Audio
+conversation uses the server's existing speech-to-text path and iOS speech synthesis
+for replies; it is turn-based voice, not a new real-time model subscription.
 
 ## Build and install
 
-Requirements are full Xcode with an iPhoneOS SDK, XcodeGen, an Apple signing team,
-and a physical iPhone for system call/audio verification. No signing identity, account,
-server URL, certificate, or API key is included in this directory.
+See [the Korean installation and signing guide](SETUP.ko.md) for the complete
+Xcode, Apple Account, free Personal Team, device, and verification steps.
 
-1. Run `xcodegen generate` in this directory to generate `CustomCloudBot.xcodeproj`.
-2. Open that project in Xcode. Select your signing team and change
-   `PRODUCT_BUNDLE_IDENTIFIER` from the example to your own identifier.
-3. Set the `CLOUDBOT_ORIGIN` build setting to your server's HTTPS origin, for example
-   `https://bot.example.org`. Use no path, credentials, query, or fragment. It starts
-   blank, so an unconfigured app shows a setup message. HTTP/localhost are rejected.
-4. Select your connected iPhone and Build/Run. Grant microphone access when requested.
-5. Sign in within the app and press the room's phone button. The WKWebView uses its
-   persistent cookie store. Tokens and API keys are never placed in call URLs.
+Requirements: full Xcode with the iOS platform, XcodeGen, a signing team for device
+installation, and a physical iPhone for background audio and Phone Recents testing.
+Command Line Tools alone cannot compile UIKit/CallKit or install an iPhone app.
 
-Generated project/Info.plist and private `*.local.xcconfig` files are ignored. App Store
-or TestFlight distribution and APNs credentials require separate account setup; this
-source does not purchase or provision any Apple service.
-
-## Web bridge
-
-Only the main frame at the configured HTTPS origin can invoke the handler. A message's
-`origin` value is ignored. Cross-origin pages cannot acquire this native call authority;
-external web links open in the system browser.
-
-```js
-window.webkit.messageHandlers.cloudbotCall.postMessage({
-  action: 'start', roomId, roomTitle
-});
+```sh
+brew install xcodegen
+cd apps/ios
+xcodegen generate --no-env
+open CustomCloudBot.xcodeproj
 ```
 
-The page waits for the `cloudbot:native-call` DOM event with
-`detail: { action: 'active', roomId }` before requesting microphone capture or starting
-audio. CallKit calls `didActivate` to produce this event; the shell does not activate
-`AVAudioSession` itself. After microphone/voice initialization succeeds, the page sends
-`{action: 'connected', roomId}`. Only then does the shell report a connected call.
+Public settings in `Config.xcconfig` use a generic bundle identifier, blank signing
+team, and blank server origin. A blank origin shows a setup message. Create an
+ignored `Config.local.xcconfig` for a particular installation:
 
-The page sends `{action: 'end', roomId}` on hangup and `{action: 'failed', roomId}` on
-initialization failure. Native events `ended` and `error` stop microphone, audio, and
-pending requests; `error` may include `message`. Native mute controls emit `muted` and
-`unmuted` events, which the page applies to its microphone track. All messages target
-the anchored call room, even when a different chat is visible.
+```xcconfig
+PRODUCT_BUNDLE_IDENTIFIER = org.example.mycustomcloudbot
+DEVELOPMENT_TEAM =
+CLOUDBOT_ORIGIN = https:/$()/bot.example.org
+```
 
-When the server generates a title after the first voice turn, or the title changes,
-the page sends `{action: 'title', roomId, roomTitle}` to refresh the active CallKit
-display without changing the call's room UUID.
+The `$()` prevents xcconfig from treating `//` in an HTTPS URL as a comment.
+Use one HTTPS origin without a path, query, credentials, or fragment. HTTP/localhost
+are rejected. Do not add the server's model API keys or login tokens to this file.
+The optional local include survives regenerating the Xcode project. CI works
+without it. Generated project files, Info.plist, and all `*.local.xcconfig` files
+are ignored by Git.
 
-Custom URL `customcloudbot://call/<room-uuid>` and CallKit's `INStartCallIntent` (plus
-the older `INStartAudioCallIntent`) route to `/?room=<room-uuid>&call=1` on the installed
-origin. A call link opens the sheet, requiring the user to press Start. The custom URL
-never accepts an origin, access token, title, arbitrary path, or command. Universal
-links are not enabled: they need a real team/bundle ID and a matching server AASA file.
+In Xcode, select the CustomCloudBot target, enable **Automatically manage signing**,
+and select your **Team**. Connect your iPhone, enable Developer Mode if asked,
+select it as the run destination, and press Run. Xcode manages the development
+certificate and provisioning profile. Team changes made only in the generated
+project are replaced on regeneration; set `DEVELOPMENT_TEAM` in the ignored local
+file to preserve them.
 
-## Validation and current limits
+Free Personal Team provisioning expires after seven days and requires another
+build/install. Apple permits Background modes for free developers. TestFlight,
+App Store distribution, and push notification capabilities require the appropriate
+paid developer membership; no subscription, signing assets, or Apple service is
+purchased or provisioned by this repository.
 
-Run `sh scripts/check.sh` for Foundation-only executable routing checks and Swift
-syntax parsing. These checks do **not** compile UIKit/WebKit/CallKit against the iOS
-SDK or validate device behavior. At implementation time the development Mac had only
-Command Line Tools, no iPhoneOS SDK, and no valid code-signing identity; therefore
-native build, installation, Phone Recents display, and real audio remain unverified.
+## Call identity and authentication
 
-Before treating this as a released native app, verify on a physical iPhone:
+Each room UUID is a generic CallKit handle. Titles are display metadata, never the
+routing key, so renaming a room does not change its call address. Calls are included
+in Phone Recents. A recent entry may retain the title from the original call.
 
-- Start two different chat calls and see the correct titles in system UI/Recents.
-- Redial each entry and verify it opens that same accessible room; deleted rooms fail.
-- Deny the microphone, fail network setup, end from system UI, and receive a cellular
-  interruption; verify capture stops and no stuck CallKit call remains.
-- Verify Bluetooth/speaker routing, mute/unmute, web navigation, logout, and a renamed
-  room. Test refresh/process death and background/lock explicitly.
+`INStartCallIntent` and the older `INStartAudioCallIntent` route a system redial to
+the recorded room, including a cold launch. Authentication and current membership
+are checked before reconnecting. Deleted or inaccessible rooms must fail rather
+than falling back to a different chat. Ordinary custom links
+`customcloudbot://call/<room-uuid>` open that room's call screen. No origin, token,
+title, arbitrary path, or command is accepted in a custom URL. Universal links and
+Siri voice commands are not enabled.
 
-WKWebView supports microphone capture, but foreground browser audio plus CallKit does
-not establish that WebKit speech recognition/playback survives suspension or screen
-lock. The current website deliberately ends calls when its document becomes hidden,
-including in this shell: this version does not keep a native call running in the
-background or when the screen locks. System audio deactivation (for example another
-call interrupting this one) ends this call too. Redial opens the same chat and retains
-its saved context. Reliable background calling should move capture/playback and the voice transport
-to a native audio engine. Incoming ringing while the app is suspended additionally
-needs PushKit/APNs and prompt CallKit reporting; neither is implemented here. Phone
-numbers and paid PSTN services are not required for this app-to-agent design.
+Only the main frame at the configured HTTPS origin can use the native bridge.
+Cross-origin pages cannot initiate a native call; external web links open in the
+system browser. The web view's normal authenticated session authorizes native
+server requests. Provider API keys remain on the server.
+
+Native audio starts only after CallKit activates the audio session, and stops on
+hangup or failure. `UIBackgroundModes` includes `audio`; the microphone, playback,
+and voice requests run natively during a call, without relying on WebKit timers
+or the visibility of the website. System mute controls target the active call.
+Lock-screen continuity is intended for an active call, not permission to keep an
+idle app running forever or recover a call after force quit.
+
+## Validation
+
+```sh
+sh apps/ios/scripts/check.sh
+sh apps/ios/scripts/build.sh
+```
+
+`check.sh` executes Foundation routing, WAV/utterance, and response protocol checks,
+then parses all Swift sources. It is
+useful on a Mac with only Command Line Tools, but does not type-check iOS APIs.
+`build.sh` regenerates the project and compiles against the real iPhoneOS SDK with
+signing disabled, a blank origin, and no Apple credentials. The separate **iOS**
+GitHub Actions workflow runs both checks on macOS for iOS changes; it does not
+install, sign, or distribute the app, or modify the OCI deployment workflow.
+
+An unsigned successful build does not verify physical device behavior. Before
+calling this a released iPhone feature, complete the checklist in `SETUP.ko.md`:
+screen lock, Bluetooth, system hangup/mute, cellular interruption, cold-launch
+Recents redial, login expiry, renamed rooms, and inaccessible/deleted rooms.
 
 ## Apple references
 
 - [CallKit](https://developer.apple.com/documentation/callkit)
-- [Outgoing/incoming call lifecycle and audio activation](https://developer.apple.com/documentation/callkit/making-and-receiving-voip-calls)
-- [Generic handles](https://developer.apple.com/documentation/callkit/cxhandle/handletype/generic)
-- [Displayed caller name](https://developer.apple.com/documentation/callkit/cxcallupdate/localizedcallername)
+- [Call lifecycle and audio activation](https://developer.apple.com/documentation/callkit/making-and-receiving-voip-calls)
 - [Phone Recents](https://developer.apple.com/documentation/callkit/cxproviderconfiguration/includescallsinrecents)
 - [INStartCallIntent and system redial](https://developer.apple.com/documentation/intents/instartcallintent)
-- [WKWebView microphone permission](https://developer.apple.com/documentation/webkit/wkuidelegate/webview(_:requestmediacapturepermissionfor:initiatedbyframe:type:decisionhandler:))
-- [PushKit incoming calls](https://developer.apple.com/documentation/pushkit/responding-to-voip-notifications-from-pushkit)
-- [Universal links](https://developer.apple.com/documentation/xcode/supporting-universal-links-in-your-app)
+- [Audio session categories and background audio](https://developer.apple.com/library/archive/documentation/Audio/Conceptual/AudioSessionProgrammingGuide/AudioSessionCategoriesandModes/AudioSessionCategoriesandModes.html)
+- [Membership capabilities](https://developer.apple.com/help/account/reference/supported-capabilities-ios)
+- [Free Personal Team limits](https://developer.apple.com/help/account/basics/about-your-developer-account)
+- [Automatic signing](https://help.apple.com/xcode/mac/current/en.lproj/dev60b6fbbc7.html)
+- [Xcode download](https://developer.apple.com/xcode/resources/)

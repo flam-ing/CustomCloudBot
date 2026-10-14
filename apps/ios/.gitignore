@@ -3,3 +3,8 @@
 Info.plist
 *.local.xcconfig
 DerivedData/
+*.xcarchive/
+*.xcresult/
+*.ipa
+*.mobileprovision
+*.provisionprofile
