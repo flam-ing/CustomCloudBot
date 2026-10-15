@@ -20,7 +20,7 @@ Node.js 24 이상에서 실행하는 same-origin HTTP API입니다. 성공 응�
 
 ## 사진·음성 첨부
 
-- `POST /api/rooms/:id/attachments` — `multipart/form-data`의 `file` 필드. JPEG, PNG, WebP, GIF, WebM, Ogg, WAV, MP3, MP4를 허용하고 파일당 최대 12MiB입니다. 성공 응답은 `{attachment:{id,kind,name,mime,size,url}}`입니다.
+- `POST /api/rooms/:id/attachments` — `multipart/form-data`의 `file` 필드. JPEG, PNG, WebP, GIF, WebM, Ogg, WAV, MP3, MP4를 허용하고 파일당 최대 12MiB입니다. 성공 응답은 `{attachment:{id,kind,name,mime,size,url}}`입니다. 사진은 파일 머리에서 읽은 `width`, `height`(화면에 보이는 방향 기준, 픽셀)도 함께 주며, 방 기록의 사진 첨부에도 같은 값이 들어갑니다.
 - `GET /api/rooms/:id/attachments/:attachmentId` — private bytes 응답. 업로더는 메시지에 게시하기 전에도 읽을 수 있고, 게시된 첨부는 방 멤버가 읽을 수 있습니다. 이미지에는 일반 응답을, audio에는 `Range` 요청을 지원합니다.
 
 첨부 metadata에는 서버 경로를 포함하지 않습니다. 모델에는 첨부 bytes가 전달되지 않으므로 사진 인식과 음성 전사는 구현되어 있지 않습니다. 클라이언트 MediaRecorder 녹음은 명시적인 사용자 클릭 뒤 시작하며 120초 또는 12MiB에서 중지됩니다.

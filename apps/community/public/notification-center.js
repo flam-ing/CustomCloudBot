@@ -1,3 +1,5 @@
+import { plainTextPreview } from "./message-format.mjs";
+
 const roomPattern = /^[a-f0-9-]{36}$/i;
 const clean = (value, max = 180) => typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
 
@@ -60,7 +62,7 @@ export function createNotificationStore() {
         room.at = Math.max(room.at, message.createdAt);
         if (!["bot", "human", "system"].includes(message.kind) || (message.kind === "human" && message.authorId === userId)) continue;
         if (message.kind === "system" && items.some((item) => item.roomId === id && item.kind === "error" && Math.abs(item.at - message.createdAt) < 5000)) continue;
-        changed = add({ id: `message:${id}:${message.id}`, roomId: id, roomName: name, kind: message.kind, title: message.kind === "bot" ? "답변이 도착했어요" : message.kind === "system" ? "대화 안내" : `${clean(message.author, 40) || "참여자"}님의 새 메시지`, text: clean(message.text) || (message.attachments?.length ? "첨부 파일을 보냈어요." : "새 메시지가 도착했어요."), at: message.createdAt }) || changed;
+        changed = add({ id: `message:${id}:${message.id}`, roomId: id, roomName: name, kind: message.kind, title: message.kind === "bot" ? "답변이 도착했어요" : message.kind === "system" ? "대화 안내" : `${clean(message.author, 40) || "참여자"}님의 새 메시지`, text: clean(message.kind === "bot" ? plainTextPreview(message.text) : message.text) || (message.attachments?.length ? "첨부 파일을 보냈어요." : "새 메시지가 도착했어요."), at: message.createdAt }) || changed;
       }
       if (room.seen.size > 400) room.seen = new Set([...room.seen].slice(-200));
       for (const event of events) changed = progress(id, event, options) || changed;

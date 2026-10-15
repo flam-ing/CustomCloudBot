@@ -31,7 +31,7 @@ import { EFFORTS, createProviderPool, formatModelList, publicModels } from "./pr
 import { createOpenClawFromEnv } from "./lib/backend/openclaw-http.mjs";
 import { parseDesktops, createDesktopHub } from "./desktop.mjs";
 import { BROWSER_TOOL_DEFINITIONS, createBrowserTools } from "./browser-tools.mjs";
-import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, createUploadLimiter, MAX_DEFAULT } from "./media.mjs";
+import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, createUploadLimiter, MAX_DEFAULT, storedImageDimensions } from "./media.mjs";
 import { createVoiceTranscriber, VOICE_MAX_BYTES } from "./voice.mjs";
 import { createMessageQueue } from "./message-queue.mjs";
 import { AVATAR_MAX_BYTES, AVATAR_MIMES, validateAvatarBytes } from "./avatar-media.mjs";
@@ -1498,7 +1498,7 @@ export async function startCommunity(options = {}) {
             const path = join(mediaDir, attachmentId);
             db.prepare("INSERT INTO attachments VALUES(?,?,?,?,?,?,?,?,?,NULL)").run(attachmentId, room.id, user.id, upload.fileName, upload.declaredMime === "audio/x-wav" ? "audio/wav" : upload.declaredMime, upload.kind, upload.size, path, Date.now());
             db.prepare("INSERT INTO media_usage VALUES(?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET bytes=bytes+excluded.bytes").run(user.id, day(), upload.size);
-            return { id: attachmentId, kind: upload.kind, name: upload.fileName, mime: upload.declaredMime === "audio/x-wav" ? "audio/wav" : upload.declaredMime, size: upload.size, url: `/api/rooms/${room.id}/attachments/${attachmentId}` };
+            return { id: attachmentId, kind: upload.kind, name: upload.fileName, mime: upload.declaredMime === "audio/x-wav" ? "audio/wav" : upload.declaredMime, size: upload.size, url: `/api/rooms/${room.id}/attachments/${attachmentId}`, ...(upload.kind === "image" ? storedImageDimensions(path, upload.declaredMime) : {}) };
           });
         } catch (e) {
           await unlink(upload.tempPath).catch(() => {});
@@ -1889,7 +1889,9 @@ export async function startCommunity(options = {}) {
         for (const message of messages) {
           if (message.kind !== "human" || message.authorId !== user.id || !message.clientNonceHash) delete message.clientNonceHash;
           if (message.kind === "human" && message.authorId) Object.assign(message, avatarShape(message.authorId));
-          message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id);
+          // Picture sizes let the transcript reserve each box before the file loads.
+          message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,a.path,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id)
+            .map(({ path, ...attachment }) => attachment.kind === "image" ? { ...attachment, ...storedImageDimensions(path, attachment.mime) } : attachment);
         }
         return reply(res, 200, {
           room: roomView(room),

@@ -1,5 +1,5 @@
 const MONITOR_ROOM = "00000000-0000-4000-8000-000000000001";
-import { renderMessageText } from "/message-format.mjs";
+import { renderMessageText, firstGrapheme, readableTextOn, continuesGroup, imageBox, isLongMessage, formatDuration, spokenDuration } from "/message-format.mjs";
 import { recommendedModels, modelLabel, filterModels } from "/model-picker.mjs";
 import { createDesktopUI } from "/desktop.js";
 import { createPwaController } from "/pwa.js";
@@ -142,7 +142,7 @@ const toast = (message) => {
     2800,
   );
 };
-const initials = (name) => (name || "?").trim().slice(0, 1).toUpperCase();
+const initials = (name) => firstGrapheme(name);
 function renderUserAvatar(avatar, user, name) {
   const label=user.avatarLabel || initials(name || user.displayName || user.username);
   const key=JSON.stringify([label,user.avatarColor,user.avatarUrl]);
@@ -150,6 +150,7 @@ function renderUserAvatar(avatar, user, name) {
   avatar.dataset.profileKey=key;
   avatar.replaceChildren();
   avatar.style.backgroundColor=user.avatarColor || "";
+  avatar.style.color=readableTextOn(user.avatarColor);
   avatar.classList.toggle("avatar-text",[...new Intl.Segmenter("ko",{granularity:"grapheme"}).segment(label)].length>1);
   if(typeof user.avatarUrl==="string" && /^\/api\/avatars\/[a-zA-Z0-9/-]+$/.test(user.avatarUrl)) {
     const photo=document.createElement("img");photo.src=user.avatarUrl;photo.alt="";photo.decoding="async";
@@ -756,12 +757,6 @@ async function refreshRoom(force = false) {
   if (!roomId || (state.pollBusy && !force)) return;
   const request = ++state.roomRequest;
   state.pollBusy = true;
-  const nearBottom =
-    els.messages.scrollHeight -
-      els.messages.scrollTop -
-      els.messages.clientHeight <
-    90;
-  const scrollTop = els.messages.scrollTop;
   try {
     if (roomId === MONITOR_ROOM) {
       const snapshot = await api("/api/admin/monitor");
@@ -780,11 +775,7 @@ async function refreshRoom(force = false) {
     notificationUI?.observeRoom(data, { userId });
     observeRoomOutcome(data);
     syncProgressStreams();
-    if (!unchanged) {
-      renderRoom(data);
-      if(nearBottom) els.messages.scrollTo({top:els.messages.scrollHeight,behavior:force?"instant":"smooth"});
-      else els.messages.scrollTop=scrollTop;
-    }
+    if (!unchanged) renderRoom(data);
   } catch (error) {
     if (request !== state.roomRequest) return;
     if (error.status === 401) {
@@ -835,31 +826,14 @@ async function optimisticMessage(roomId, text, nonce, attachments = []) {
   return message;
 }
 function paintPending(roomId) {
-  if(state.selectedRoom===roomId && state.roomData){renderRoom(state.roomData);els.messages.scrollTop=els.messages.scrollHeight;}
-  state.extra.forEach((pane,index)=>{if(pane.roomId!==roomId)return;const list=$$(".extra-pane")[index]?.querySelector(".message-list");if(!list)return;list.replaceChildren(...mergePendingMessages(pane.data?.messages || [],pendingMessages.get(roomId)).map(message=>createMessage(message,pane,roomId)));list.scrollTop=list.scrollHeight;});
+  if(state.selectedRoom===roomId && state.roomData){els.messages._pinned=true;renderRoom(state.roomData);}
+  state.extra.forEach((pane,index)=>{if(pane.roomId!==roomId)return;const list=$$(".extra-pane")[index]?.querySelector(".message-list");if(!list)return;list._pinned=true;renderTranscript(list,mergePendingMessages(pane.data?.messages || [],pendingMessages.get(roomId)),{pane,roomId,busy:!!pane.data?.busy&&pane.data.room?.id===roomId});});
 }
 function renderRoom(data) {
   if(data.room) {const room=state.rooms.find(r=>r.id===data.room.id);if(room&&room.name!==data.room.name){room.name=data.room.name;els.roomTitle.textContent=room.name;renderRooms();}}
   renderContextMeter(data.context);
   messageQueueUI?.render($("#composer-form"), data.room.id, data.queue);
-  const previousNodes=new Map([...els.messages.children].filter(el=>el.dataset.messageId).map(el=>[el.dataset.messageId,el]));
-  els.messages.replaceChildren();
-  const messages = mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id));
-  if (!messages.length) {
-    const empty = document.createElement("div");
-    empty.className = "message-empty";
-    const title = document.createElement("strong");
-    title.textContent = "아직 메시지가 없습니다.";
-    const note = document.createElement("span");
-    note.textContent = "메시지를 보내 대화를 시작하세요.";
-    empty.append(title, note);
-    els.messages.append(empty);
-  } else
-    messages.forEach(message=>{
-      const node=(!message.pending && !previousNodes.get(message.id)?.dataset.pending ? previousNodes.get(message.id) : null) || createMessage(message,null,data.room.id);
-      if(message.kind==="human")renderUserAvatar($(".avatar",node),messageProfile(message),message.author);
-      els.messages.append(node);
-    });
+  renderTranscript(els.messages, mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id)), {roomId:data.room.id, busy:!!data.busy, empty:{title:"아직 메시지가 없습니다.", note:"메시지를 보내 대화를 시작하세요."}});
   const members = data.members || [];
   els.memberCount.textContent = members.length;
   els.memberList.replaceChildren();
@@ -886,7 +860,6 @@ function renderRoom(data) {
   });
   els.roomView.classList.toggle("agent-working",!!data.busy);
   if (data.busy) {
-    els.messages.append(thinkingRow());
     clearThinking(els.sendingStatus);
   } else if (!state.sending) {
     clearThinking(els.sendingStatus);
@@ -1028,7 +1001,12 @@ function clearThinking(target) {
 function thinkingRow(roomId = state.selectedRoom) {
   const article = document.createElement("article");
   article.className = "message message-bot message-thinking";
+  article.dataset.roomId = roomId;
   article.setAttribute("aria-label", "에이전트 진행 상황");
+  const avatar = document.createElement("div");
+  avatar.className = "avatar avatar-bot";
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.append(icon("bot"));
   const body = document.createElement("div");
   body.className = "message-body";
   const bubble = document.createElement("div");
@@ -1037,79 +1015,479 @@ function thinkingRow(roomId = state.selectedRoom) {
   bubble.append(...thinkParts());
   renderProgressTarget(bubble, roomId);
   body.append(bubble);
-  article.append(body);
+  article.append(avatar, body);
   return article;
 }
+
+// Transcript. The main conversation and every split pane share this renderer.
+// Nodes that did not change stay in place, so selection, playback and folding survive
+// polling, and only genuinely new messages animate in.
 const animatedMessages = new Set();
-function createMessage(message, pane = null, roomId = state.selectedRoom) {
+const transcriptTime = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "2-digit" });
+const transcriptDay = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+const transcriptYearDay = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" });
+const PIN_DISTANCE = 48;
+let transcriptResizeObserver;
+function transcriptResize() {
+  if (transcriptResizeObserver !== undefined) return transcriptResizeObserver;
+  transcriptResizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver((entries, observer) => {
+    const lists = new Set();
+    for (const { target } of entries) {
+      // Panes rebuilt by the split layout drop their old nodes; stop watching them.
+      if (!target.isConnected) { observer.unobserve(target); continue; }
+      lists.add(target.classList.contains("message-list") ? target : target.parentElement);
+    }
+    for (const list of lists) if (list?.isConnected && list._pinned !== false) list.scrollTop = list.scrollHeight;
+  }) : null;
+  return transcriptResizeObserver;
+}
+const transcriptDistance = (list) => list.scrollHeight - list.scrollTop - list.clientHeight;
+function updateTranscriptJump(list) {
+  const view = list._transcript;
+  if (!view) return;
+  // Only a conversation gets the button; the server dashboard reuses the same list.
+  const conversation = view.hadMessages && view.nodes[0]?.parentNode === list;
+  const show = conversation && list._pinned === false && (view.unseen > 0 || transcriptDistance(list) > list.clientHeight * 0.6);
+  view.jump.hidden = !show;
+  const label = view.unseen ? `새 메시지 ${view.unseen}개` : "맨 아래로";
+  if (view.jumpLabel.textContent !== label) view.jumpLabel.textContent = label;
+}
+function setupTranscript(list) {
+  if (list._transcript) return list._transcript;
+  const view = { roomId: undefined, nodes: [], days: new Map(), unseen: 0, thinking: null, empty: null };
+  list._transcript = view;
+  list._pinned = true;
+  list.setAttribute("role", "log");
+  list.removeAttribute("aria-live");
+  if (!list.hasAttribute("aria-label")) list.setAttribute("aria-label", "대화 내용");
+  const anchor = document.createElement("div");
+  anchor.className = "transcript-jump-anchor";
+  view.jump = document.createElement("button");
+  view.jump.type = "button";
+  view.jump.className = "transcript-jump";
+  view.jump.hidden = true;
+  view.jumpLabel = document.createElement("span");
+  view.jump.append(icon("arrow"), view.jumpLabel);
+  view.jump.addEventListener("click", (event) => {
+    list._pinned = true;
+    view.unseen = 0;
+    list.scrollTop = list.scrollHeight;
+    updateTranscriptJump(list);
+    if (event.detail === 0) list.closest(".room-view")?.querySelector("textarea")?.focus({ preventScroll: true });
+  });
+  anchor.append(view.jump);
+  list.after(anchor);
+  list.addEventListener("scroll", () => {
+    list._pinned = transcriptDistance(list) < PIN_DISTANCE;
+    if (list._pinned) view.unseen = 0;
+    updateTranscriptJump(list);
+  }, { passive: true });
+  // Touch screens have no hover: a tap on a message shows its copy and fork buttons.
+  list.addEventListener("click", (event) => {
+    if (!matchMedia("(hover: none)").matches) return;
+    if (event.target.closest("a, button, input, select, textarea, .audio-player")) return;
+    const message = event.target.closest(".message:not(.message-thinking)");
+    for (const active of list.querySelectorAll(":scope > .message.is-active")) if (active !== message) active.classList.remove("is-active");
+    message?.classList.toggle("is-active");
+  });
+  transcriptResize()?.observe(list);
+  return view;
+}
+function messageSignature(message) {
+  return JSON.stringify([message.kind, message.author, message.text, message.pending || "", message.error || "", (message.attachments || []).map((item) => [item?.id, item?.url, item?.width, item?.height])]);
+}
+const dayKey = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`; };
+function dayLabel(value) {
+  const date = new Date(value), today = new Date(), yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (dayKey(date) === dayKey(today)) return "오늘";
+  if (dayKey(date) === dayKey(yesterday)) return "어제";
+  return (date.getFullYear() === today.getFullYear() ? transcriptDay : transcriptYearDay).format(date);
+}
+function renderTranscript(list, messages, { pane = null, roomId = state.selectedRoom, busy = false, empty = null } = {}) {
+  const view = setupTranscript(list);
+  // A new room, a list emptied elsewhere, or history replacing a loading note opens at
+  // the latest message without animation.
+  const firstPaint = view.roomId !== roomId || !view.hadMessages || view.nodes[0]?.parentNode !== list;
+  if (firstPaint) { view.roomId = roomId; view.days.clear(); view.unseen = 0; view.thinking = null; list._pinned = true; }
+  const wasPinned = list._pinned !== false;
+  const previous = new Map(), pending = [];
+  for (const child of list.children) {
+    if (!child.dataset.messageId) continue;
+    previous.set(child.dataset.messageId, child);
+    if (child.dataset.pending && child._message) pending.push(child._message);
+  }
+  const nodes = [], fresh = [];
+  let before = null;
+  for (const message of messages) {
+    const day = dayKey(message.createdAt);
+    if (day && dayKey(before?.createdAt) !== day) {
+      let divider = view.days.get(day);
+      if (!divider) {
+        divider = document.createElement("div");
+        divider.className = "message-day";
+        divider.setAttribute("role", "separator");
+        view.days.set(day, divider);
+      }
+      const label = dayLabel(message.createdAt);
+      if (divider.textContent !== label) divider.textContent = label;
+      nodes.push(divider);
+    }
+    const signature = messageSignature(message);
+    let node = message.id ? previous.get(message.id) : null;
+    if (!node || node._signature !== signature) {
+      // The confirmed copy of a bubble already on screen replaces it without sliding in again.
+      const confirmed = pending.some((item) => (item.id && item.id === message.id) || (item.clientNonceHash && item.clientNonceHash === message.clientNonceHash));
+      node = createMessage(message, pane, roomId, { animate: !firstPaint && !confirmed });
+      node._signature = signature;
+      node._message = message;
+      transcriptResize()?.observe(node);
+      if (!firstPaint && !confirmed) fresh.push(node);
+    } else if (message.kind === "human") {
+      const avatar = node.querySelector(":scope > .avatar");
+      if (avatar) renderUserAvatar(avatar, messageProfile(message), message.author);
+    }
+    node.classList.toggle("is-grouped", continuesGroup(before, message));
+    nodes.push(node);
+    before = message;
+  }
+  if (!messages.length) {
+    view.empty ||= Object.assign(document.createElement("div"), { className: "message-empty" });
+    const parts = [empty?.title && ["strong", empty.title], empty?.note && ["span", empty.note]].filter(Boolean);
+    const key = JSON.stringify(parts);
+    if (view.empty.dataset.key !== key) {
+      view.empty.dataset.key = key;
+      view.empty.replaceChildren(...parts.map(([tag, text]) => Object.assign(document.createElement(tag), { textContent: text })));
+    }
+    nodes.push(view.empty);
+  }
+  if (busy) {
+    if (view.thinking?.dataset.roomId !== roomId) view.thinking = thinkingRow(roomId);
+    nodes.push(view.thinking);
+  }
+  const keep = new Set(nodes);
+  for (const child of [...list.children]) if (!keep.has(child)) { transcriptResize()?.unobserve(child); child.remove(); }
+  let cursor = list.firstElementChild;
+  for (const node of nodes) {
+    if (node === cursor) { cursor = cursor.nextElementSibling; continue; }
+    list.insertBefore(node, cursor);
+  }
+  view.nodes = nodes;
+  view.hadMessages = messages.length > 0;
+  if (firstPaint || wasPinned) {
+    // A reply taller than the view opens at its first line instead of its last.
+    const tall = fresh.length <= 4 && fresh.find((node) => node.classList.contains("message-bot") && node.offsetHeight > list.clientHeight * 0.8);
+    if (tall) {
+      list.scrollTop += tall.getBoundingClientRect().top - list.getBoundingClientRect().top - 16;
+      list._pinned = transcriptDistance(list) < PIN_DISTANCE;
+    } else list.scrollTop = list.scrollHeight;
+  } else view.unseen += fresh.length;
+  updateTranscriptJump(list);
+}
+let messageClipCount = 0;
+function messageText(text) {
+  const paragraph = document.createElement("p");
+  paragraph.className = "message-text";
+  if (!isLongMessage(text)) { paragraph.textContent = text; return paragraph; }
+  const clip = document.createElement("span");
+  clip.className = "message-clip";
+  clip.id = "message-clip-" + (++messageClipCount);
+  clip.textContent = text;
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "message-more";
+  more.textContent = "더 보기";
+  more.setAttribute("aria-expanded", "false");
+  more.setAttribute("aria-controls", clip.id);
+  more.addEventListener("click", () => {
+    const open = !paragraph.classList.contains("is-expanded");
+    const list = paragraph.closest(".message-list");
+    // Reading an opened message should not be cut short by the list jumping to the end.
+    if (open && list) list._pinned = false;
+    paragraph.classList.toggle("is-expanded", open);
+    more.textContent = open ? "접기" : "더 보기";
+    more.setAttribute("aria-expanded", String(open));
+    if (!open) paragraph.closest(".message")?.scrollIntoView({ block: "nearest" });
+  });
+  paragraph.classList.add("is-collapsible");
+  paragraph.append(clip, more);
+  return paragraph;
+}
+function messageImage(attachment, grid) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-image";
+  button.setAttribute("aria-label", attachment.name ? `사진 크게 보기: ${attachment.name}` : "사진 크게 보기");
+  const image = document.createElement("img");
+  image.alt = "";
+  image.decoding = "async";
+  image.loading = "lazy";
+  image.draggable = false;
+  const size = (width, height) => {
+    if (grid) { image.style.objectFit = Math.min(width, height) >= 160 ? "cover" : "scale-down"; return true; }
+    const box = imageBox(width, height);
+    if (!box) return false;
+    button.style.width = box.width + "px";
+    button.style.aspectRatio = `${box.width} / ${box.height}`;
+    image.width = box.width;
+    image.height = box.height;
+    image.style.objectFit = box.fit;
+    button.classList.remove("is-unsized");
+    return true;
+  };
+  const sized = attachment.width > 0 && attachment.height > 0 && size(attachment.width, attachment.height);
+  if (!sized) button.classList.add("is-unsized");
+  image.addEventListener("load", () => {
+    if (!sized && image.naturalWidth) size(image.naturalWidth, image.naturalHeight);
+    button.classList.add("is-loaded");
+  }, { once: true });
+  image.addEventListener("error", () => {
+    button.classList.add("is-broken");
+    button.disabled = true;
+    button.setAttribute("aria-label", "사진을 불러오지 못했어요");
+    const note = document.createElement("span");
+    note.textContent = "사진을 불러오지 못했어요";
+    button.append(note);
+  }, { once: true });
+  image.src = attachment.url;
+  button.append(image);
+  button.addEventListener("click", () => openImageViewer(attachment, button));
+  return button;
+}
+function openImageViewer(attachment, opener) {
+  const dialog = $("#image-dialog"), image = $("#image-dialog-image"), figure = image.closest(".image-viewer");
+  const status = $("#image-dialog-status"), caption = $("#image-dialog-caption");
+  if (!dialog._viewer) {
+    dialog._viewer = true;
+    dialog.addEventListener("close", () => {
+      image.removeAttribute("src");
+      const back = dialog._opener;
+      dialog._opener = null;
+      if (back?.isConnected) back.focus({ preventScroll: true });
+    });
+  }
+  dialog._opener = opener;
+  figure?.classList.remove("is-loaded", "is-broken");
+  if (status) status.textContent = "사진을 불러오는 중…";
+  image.onload = () => { figure?.classList.add("is-loaded"); if (status) status.textContent = ""; };
+  image.onerror = () => { figure?.classList.add("is-broken"); if (status) status.textContent = "사진을 불러오지 못했어요."; };
+  image.alt = attachment.name || "첨부 사진";
+  if (attachment.width > 0 && attachment.height > 0) { image.width = attachment.width; image.height = attachment.height; }
+  else { image.removeAttribute("width"); image.removeAttribute("height"); }
+  if (caption) caption.textContent = attachment.name || "";
+  image.src = attachment.url;
+  openDialog(dialog);
+}
+const playingAudio = new Set();
+function audioGlyph(path) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "audio-glyph");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const shape = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  shape.setAttribute("d", path);
+  svg.append(shape);
+  return svg;
+}
+const AUDIO_PLAY = "M8 5.8v12.4c0 .8.9 1.3 1.6.8l9.4-6.2c.6-.4.6-1.2 0-1.6L9.6 5c-.7-.5-1.6 0-1.6.8Z";
+const AUDIO_PAUSE = "M7.5 5h2.8c.4 0 .7.3.7.7v12.6c0 .4-.3.7-.7.7H7.5a.7.7 0 0 1-.7-.7V5.7c0-.4.3-.7.7-.7Zm6.2 0h2.8c.4 0 .7.3.7.7v12.6c0 .4-.3.7-.7.7h-2.8a.7.7 0 0 1-.7-.7V5.7c0-.4.3-.7.7-.7Z";
+function audioPlayer(attachment, message) {
+  const player = document.createElement("div");
+  player.className = "audio-player";
+  player.setAttribute("role", "group");
+  const owner = message.author ? `${message.author}의 음성 메시지` : "음성 메시지";
+  const audio = document.createElement("audio");
+  audio.preload = "metadata";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "audio-toggle";
+  const seek = document.createElement("input");
+  seek.type = "range";
+  seek.className = "audio-seek";
+  seek.min = "0"; seek.max = "1000"; seek.step = "1"; seek.value = "0";
+  seek.setAttribute("aria-label", "재생 위치");
+  const clock = document.createElement("span");
+  clock.className = "audio-time";
+  clock.setAttribute("aria-hidden", "true");
+  let duration = 0, measuring = false;
+  const setPlaying = (playing) => {
+    toggle.replaceChildren(audioGlyph(playing ? AUDIO_PAUSE : AUDIO_PLAY));
+    toggle.setAttribute("aria-label", playing ? "일시 정지" : "재생");
+    player.classList.toggle("is-playing", playing);
+  };
+  const paint = () => {
+    const current = measuring ? 0 : Math.min(duration || Infinity, audio.currentTime || 0);
+    const ratio = duration ? current / duration : 0;
+    seek.value = String(Math.round(ratio * 1000));
+    seek.style.setProperty("--progress", (ratio * 100).toFixed(2) + "%");
+    seek.disabled = !duration;
+    clock.textContent = duration ? `${formatDuration(current)} / ${formatDuration(duration)}` : formatDuration(current);
+    seek.setAttribute("aria-valuetext", duration ? `${spokenDuration(current)} / ${spokenDuration(duration)}` : spokenDuration(current));
+    player.setAttribute("aria-label", duration ? `${owner}, ${spokenDuration(duration)}` : owner);
+  };
+  const learn = () => {
+    if (!(Number.isFinite(audio.duration) && audio.duration > 0)) return false;
+    duration = audio.duration;
+    return true;
+  };
+  audio.addEventListener("loadedmetadata", () => {
+    if (learn()) { paint(); return; }
+    // Recorded WebM files often carry no length. Seeking far ahead makes the browser measure it.
+    measuring = true;
+    const settle = () => {
+      if (!learn()) return;
+      audio.removeEventListener("durationchange", settle);
+      audio.removeEventListener("timeupdate", settle);
+      measuring = false;
+      audio.currentTime = 0;
+      paint();
+    };
+    audio.addEventListener("durationchange", settle);
+    audio.addEventListener("timeupdate", settle);
+    audio.currentTime = 1e101;
+  });
+  audio.addEventListener("durationchange", () => { if (!measuring && learn()) paint(); });
+  audio.addEventListener("timeupdate", () => { if (!measuring) paint(); });
+  audio.addEventListener("play", () => { for (const other of playingAudio) if (other !== audio) other.pause(); playingAudio.add(audio); setPlaying(true); });
+  audio.addEventListener("pause", () => { playingAudio.delete(audio); setPlaying(false); });
+  audio.addEventListener("ended", () => { audio.currentTime = 0; paint(); });
+  audio.addEventListener("error", () => {
+    player.classList.add("is-error");
+    toggle.disabled = true;
+    seek.disabled = true;
+    clock.textContent = "재생할 수 없어요";
+  });
+  toggle.addEventListener("click", () => {
+    if (audio.paused) audio.play().catch(() => toast("음성을 재생하지 못했어요."));
+    else audio.pause();
+  });
+  seek.addEventListener("input", () => {
+    if (!duration) return;
+    audio.currentTime = (Number(seek.value) / 1000) * duration;
+    paint();
+  });
+  setPlaying(false);
+  paint();
+  audio.src = attachment.url;
+  player.append(toggle, seek, clock, audio);
+  return player;
+}
+function retryPendingMessage(message, pane) {
+  const form = pane ? $$(".extra-pane")[state.extra.indexOf(pane)]?.querySelector(".pane-composer") : $("#composer-form");
+  const input = form && $("textarea", form);
+  if (!input) return;
+  const text = message.text || "";
+  if (input.value.trim() && input.value.trim() !== text.trim()) {
+    toast("입력창에 쓰던 글을 먼저 보내거나 지운 뒤 다시 보내 주세요.");
+    input.focus();
+    return;
+  }
+  input.value = text;
+  if (pane) pane.draft = text;
+  form.requestSubmit();
+}
+function discardPendingMessage(message, pane, roomId) {
+  if (pendingMessages.get(roomId) !== message) return;
+  pendingMessages.delete(roomId);
+  const form = pane ? $$(".extra-pane")[state.extra.indexOf(pane)]?.querySelector(".pane-composer") : $("#composer-form");
+  const input = form && $("textarea", form);
+  if (input && input.value === message.text) { input.value = ""; if (pane) pane.draft = ""; }
+  paintPending(roomId);
+}
+function createMessage(message, pane = null, roomId = state.selectedRoom, { animate = true } = {}) {
   const article = document.createElement("article");
   if(message.id)article.dataset.messageId=message.id;
   if(message.pending)article.dataset.pending=message.pending;
-  const own =
-    message.kind === "human" && message.authorId === state.session?.user?.id;
-  article.className = `message message-${message.kind}${own ? " message-own" : ""}`;
-  if(message.id && Date.now()-message.createdAt<15000 && !animatedMessages.has(message.id)){article.classList.add("message-enter");animatedMessages.add(message.id);if(animatedMessages.size>500)animatedMessages.delete(animatedMessages.values().next().value);}
-  const avatar = document.createElement("div");
-  avatar.className = `avatar ${message.kind === "bot" ? "avatar-bot" : ""}`;
-  if (message.kind !== "bot") renderUserAvatar(avatar,messageProfile(message),message.author);
-  const body = document.createElement("div");
-  body.className = "message-body";
+  const own = message.kind === "human" && message.authorId === state.session?.user?.id;
+  const bot = message.kind === "bot", system = message.kind === "system";
+  article.className = `message message-${message.kind}${own ? " message-own" : ""}${message.pending === "failed" ? " is-failed" : message.pending ? " is-sending" : ""}`;
+  if(animate && message.id && Date.now()-message.createdAt<15000 && !animatedMessages.has(message.id)){
+    article.classList.add("message-enter");
+    // Once played, the class goes away so moving or repainting the node never replays it.
+    article.addEventListener("animationend",event=>{if(event.target===article)article.classList.remove("message-enter");});
+    animatedMessages.add(message.id);if(animatedMessages.size>500)animatedMessages.delete(animatedMessages.values().next().value);
+  }
+  if (!own && !system) {
+    const avatar = document.createElement("div");
+    avatar.className = `avatar${bot ? " avatar-bot" : ""}`;
+    avatar.setAttribute("aria-hidden", "true");
+    if (bot) avatar.append(icon("bot"));
+    else renderUserAvatar(avatar,messageProfile(message),message.author);
+    article.append(avatar);
+  }
   const meta = document.createElement("div");
   meta.className = "message-meta";
-  const author = document.createElement("strong");
-  author.textContent =
-    message.author || (message.kind === "system" ? "안내" : "알 수 없음");
-  const time = document.createElement("time");
-  time.textContent = new Intl.DateTimeFormat("ko-KR", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(message.createdAt));
-  time.dateTime = new Date(message.createdAt).toISOString();
-  time.title = formatDate(message.createdAt);
-  meta.append(author, time);
-  if (message.text) {
-    const text = message.kind === "bot" ? renderMessageText(message.text) : document.createElement("p");
-    if(message.kind !== "bot")text.textContent = message.text;
-    body.append(text);
+  const name = message.author || (system ? "안내" : "알 수 없음");
+  if (own) {
+    const label = document.createElement("span");
+    label.className = "sr-only";
+    label.textContent = `나(${name})`;
+    meta.append(label);
+  } else {
+    const author = document.createElement("strong");
+    author.textContent = name;
+    meta.append(author);
   }
-  if (Array.isArray(message.attachments)) {
+  if (bot) {
+    const badge = document.createElement("span");
+    badge.className = "message-badge";
+    badge.textContent = "AI";
+    badge.title = "AI가 쓴 답변";
+    meta.append(badge);
+  }
+  const time = document.createElement("time");
+  const date = new Date(message.createdAt);
+  if (!Number.isNaN(date.getTime())) {
+    time.dateTime = date.toISOString();
+    time.title = formatDate(message.createdAt);
+    time.textContent = message.pending === "sending" ? "보내는 중" : transcriptTime.format(date);
+  }
+  meta.append(time);
+  article.append(meta);
+  const body = document.createElement("div");
+  body.className = "message-body";
+  if (message.text) body.append(bot ? renderMessageText(message.text) : messageText(message.text));
+  const files = (Array.isArray(message.attachments) ? message.attachments : []).filter((item) => item?.url);
+  if (files.length) {
     const attachments = document.createElement("div");
     attachments.className = "message-attachments";
-    message.attachments.forEach((attachment) => {
-      if (!attachment || !attachment.url) return;
-      if (attachment.kind === "image") {
-        const image = document.createElement("img");
-        image.src = attachment.url;
-        image.alt = attachment.name || "첨부 이미지";
-        image.loading = "lazy";
-        image.addEventListener("click", () => {
-          $("#image-dialog-image").src = attachment.url;
-          $("#image-dialog-image").alt = attachment.name || "첨부 이미지";
-          openDialog($("#image-dialog"));
-        });
-        attachments.append(image);
-      } else if (attachment.kind === "audio") {
-        const audio = document.createElement("audio");
-        audio.controls = true;
-        audio.preload = "metadata";
-        audio.src = attachment.url;
-        audio.setAttribute("aria-label", attachment.name || "첨부 음성");
-        attachments.append(audio);
-      }
-    });
+    const images = files.filter((item) => item.kind === "image").length;
+    if (images > 1) attachments.classList.add("is-grid");
+    for (const attachment of files) {
+      if (attachment.kind === "image") attachments.append(messageImage(attachment, images > 1));
+      else if (attachment.kind === "audio") attachments.append(audioPlayer(attachment, message));
+    }
     if (attachments.childElementCount) body.append(attachments);
   }
-  if (message.kind !== "bot") article.append(avatar);
+  if (message.pending === "failed") {
+    const failure = document.createElement("div");
+    failure.className = "message-send-error";
+    const note = document.createElement("span");
+    note.textContent = message.error || "보내지 못했어요.";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "다시 보내기";
+    retry.onclick = () => retryPendingMessage(message, pane);
+    const discard = document.createElement("button");
+    discard.type = "button";
+    discard.textContent = "삭제";
+    discard.setAttribute("aria-label", "보내지 못한 메시지 삭제");
+    discard.onclick = () => discardPendingMessage(message, pane, roomId);
+    failure.append(note, retry, discard);
+    body.append(failure);
+  }
+  article.append(body);
   if (!message.pending && roomId !== MONITOR_ROOM && message.id) {
     const actions = document.createElement("div"); actions.className = "message-actions";
+    actions.setAttribute("role", "group"); actions.setAttribute("aria-label", "메시지 도구");
+    // Follow-up messages hide their name row, so the hover tools carry the time.
+    if (!Number.isNaN(date.getTime())) { const at = document.createElement("span"); at.className = "message-actions-time"; at.setAttribute("aria-hidden", "true"); at.textContent = transcriptTime.format(date); actions.append(at); }
     const copy = document.createElement("button"); copy.type = "button"; copy.append(icon("copy")); copy.title = "메시지 복사"; copy.setAttribute("aria-label", copy.title);
     copy.onclick = () => navigator.clipboard.writeText(message.text || "").then(() => toast("복사했습니다.")).catch(() => toast("복사하지 못했습니다."));
     const fork = document.createElement("button"); fork.type = "button"; fork.append(icon("fork")); fork.title = "여기서 포크 · 이 메시지까지를 줄기로 새 가지를 만듭니다"; fork.setAttribute("aria-label", "여기서 포크");
     fork.onclick = () => sessionAction("fork", pane, fork, message.id, roomId);
     actions.append(copy, fork); body.append(actions);
   }
-  if (message.pending === "failed") { const note=document.createElement("p");note.className="message-send-error";note.textContent="전송을 확인하지 못했어요. 입력창에서 다시 시도해 주세요.";body.append(note); }
-  article.append(body);
   return article;
 }
 function renderBotPicker() {
@@ -1433,7 +1811,7 @@ async function submitMessage(event, skipTopic = false) {
     if(state.session?.user?.id!==sendUserId)return;
     if(accepted){toast("메시지는 접수됐습니다. 대화를 다시 불러오고 있어요.");return;}
     presenceErrors.add(roomId);
-    if(pending)pending.pending="failed";
+    if(pending){pending.pending="failed";pending.error=error.status?error.message:"연결이 불안정해 전송을 확인하지 못했어요.";}
     if(state.selectedRoom===roomId && !input.value)input.value=text;
     paintPending(roomId);toast(error.message);
   } finally {
@@ -2024,18 +2402,8 @@ function renderExtraPanes() {
 
     const list = document.createElement("div");
     list.className = "message-list";
-    const messages = mergePendingMessages(pane.data?.messages || [],pendingMessages.get(pane.roomId));
-    if (messages.length) messages.forEach((message) => list.append(createMessage(message,pane,pane.roomId)));
-    else {
-      const empty = document.createElement("div");
-      empty.className = "message-empty";
-      const note = document.createElement("span");
-      note.textContent = pane.roomId ? "메시지를 불러오는 중…" : "이 칸을 누른 뒤 왼쪽 대화를 고르세요.";
-      empty.append(note);
-      list.append(empty);
-    }
+    list.setAttribute("aria-label", (room?.name || "대화") + " 대화 내용");
     section.classList.toggle("agent-working", !!pane.data?.busy);
-    if (pane.data?.busy && pane.data.room?.id === pane.roomId) list.append(thinkingRow(pane.roomId));
     const form = document.createElement("form");
     form.className = "composer pane-composer";
     form.addEventListener("submit", (event) => submitPane(event, index));
@@ -2080,6 +2448,7 @@ function renderExtraPanes() {
     messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
     grid.append(section);
+    renderTranscript(list, mergePendingMessages(pane.data?.messages || [],pendingMessages.get(pane.roomId)), {pane, roomId:pane.roomId, busy:!!pane.data?.busy && pane.data.room?.id === pane.roomId, empty:{note:pane.roomId ? "메시지를 불러오는 중…" : "이 칸을 누른 뒤 왼쪽 대화를 고르세요."}});
     renderPendingAttachments(pane);
 
   });
@@ -2161,7 +2530,7 @@ async function submitPane(event, index, skipTopic = false) {
   } catch (error) {
     if(state.session?.user?.id!==userId)return;
     if(accepted){toast("메시지는 접수됐습니다. 대화를 다시 불러오고 있어요.");return;}
-    presenceErrors.add(roomId);if(pending)pending.pending="failed";
+    presenceErrors.add(roomId);if(pending){pending.pending="failed";pending.error=error.status?error.message:"연결이 불안정해 전송을 확인하지 못했어요.";}
     if(pane.roomId===roomId){input.value=text;pane.draft=text;}
     paintPending(roomId);toast(error.message);
   } finally {
@@ -2190,22 +2559,8 @@ async function refreshExtra(index) {
     if (!section) return;
     renderContextMeter(data.context,$(".pane-composer",section),pane);
     messageQueueUI?.render($(".pane-composer",section), roomId, data.queue);
-    const list = $(".message-list", section);
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 90;
-    list.replaceChildren();
-    const messages = mergePendingMessages(data.messages || [],pendingMessages.get(roomId));
-    if (messages.length) messages.forEach((message) => list.append(createMessage(message,pane,roomId)));
-    else {
-      const empty = document.createElement("div");
-      empty.className = "message-empty";
-      const note = document.createElement("span");
-      note.textContent = "메시지를 보내 대화를 시작하세요.";
-      empty.append(note);
-      list.append(empty);
-    }
+    renderTranscript($(".message-list", section), mergePendingMessages(data.messages || [],pendingMessages.get(roomId)), {pane, roomId, busy:!!data.busy, empty:{note:"메시지를 보내 대화를 시작하세요."}});
     section.classList.toggle("agent-working", !!data.busy);
-    if (data.busy) list.append(thinkingRow(roomId));
-    if (nearBottom) list.scrollTop = list.scrollHeight;
     $("h2", section).textContent = data.room?.name || "대화";
     const listed=state.rooms.find(room=>room.id===roomId);
     if(listed&&data.room?.name&&listed.name!==data.room.name){listed.name=data.room.name;renderRooms();}
