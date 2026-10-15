@@ -1036,6 +1036,8 @@ export async function startCommunity(options = {}) {
           "/integrations": ["integrations.html", "text/html"],
           "/integrations.js": ["integrations.js", "text/javascript"],
           "/integrations.css": ["integrations.css", "text/css"],
+          "/integrations-ui.mjs": ["integrations-ui.mjs", "text/javascript"],
+          "/host-dashboard.mjs": ["host-dashboard.mjs", "text/javascript"],
           "/": ["index.html", "text/html"],
           "/message-format.mjs": ["message-format.mjs", "text/javascript"],
           "/model-picker.mjs": ["model-picker.mjs", "text/javascript"],

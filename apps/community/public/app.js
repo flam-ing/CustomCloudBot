@@ -5,6 +5,8 @@ import { createDesktopUI } from "/desktop.js";
 import { createPwaController } from "/pwa.js";
 import { applyBrand, createBotSetupUI } from "/setup.js";
 import { createMailUI } from "/mail.js";
+import { renderHostDashboard as buildHostDashboard } from "/host-dashboard.mjs";
+import { openCapabilityHub as showCapabilityHub } from "/integrations-ui.mjs";
 import { createAgentPresence, resolveAgentPresence } from "/agent-presence.js";
 import { createNotificationCenter } from "/notification-center.js";
 import { createInviteLink, createInviteLinks } from "/invite-links.mjs";
@@ -717,38 +719,16 @@ async function selectRoom(id) {
   await refreshRoom(true);
   startPolling();
 }
+// The last live snapshot stays on screen, dimmed, when the collector stops.
+let hostDashboardLast = null, hostDashboardKey = "";
 function renderHostDashboard(snapshot) {
-  const panel = document.createElement("section");
-  panel.className = "host-dashboard";
-  const element = (tag, text, className) => { const node=document.createElement(tag); node.textContent=text; if(className)node.className=className; return node; };
-  panel.append(element("h2", "서버 대시보드"), element("p", "연결된 호스트 전체 사용량", "host-subtitle"));
-  if (!snapshot.available || snapshot.scope !== "a1-host") {
-    panel.append(element("p", "최신 서버 상태를 받지 못했습니다. 잠시 후 자동으로 다시 확인합니다.", "host-warning"));
-  } else {
-    const format = n => Number(n).toFixed(1);
-    const cards = element("div", "", "host-cards");
-    const metrics = [
-      ["CPU", `${format(snapshot.cpuUsedPercent)}%`, `${snapshot.cpuCount} OCPU 전체`, snapshot.cpuUsedPercent],
-      ["메모리", `${format(snapshot.memoryUsedGiB)} GiB`, `OS 사용 가능 ${format(snapshot.memoryTotalGiB)} GiB`, snapshot.memoryUsedGiB / snapshot.memoryTotalGiB * 100],
-      ["전체 디스크", `${format(snapshot.diskUsedPercent)}%`, `${format(snapshot.diskUsedGiB)} / ${format(snapshot.diskTotalGiB)} GiB 사용`, snapshot.diskUsedPercent],
-    ];
-    for (const [label,value,detail,percent] of metrics) {
-      const card=element("article", "", "host-card");
-      card.append(element("h3",label),element("strong",value),element("p",detail));
-      const meter=document.createElement("progress"); meter.max=100; meter.value=Math.min(100,Math.max(0,percent)); meter.setAttribute("aria-label",label+" 사용률");card.append(meter);cards.append(card);
-    }
-    panel.append(cards);
-    const storage=element("section","","host-storage");
-    storage.append(element("h3","디스크 공간"),element("p",`파일시스템 여유 ${format(snapshot.diskFreeGiB)} GiB · 미할당 ${format(snapshot.diskUnallocatedGiB)} GiB`));
-    if(snapshot.diskUnallocatedGiB>1) storage.append(element("p","미할당 공간은 파티션 확장 전까지 파일 저장에 사용할 수 없습니다.","host-subtitle"));
-    for (const fs of snapshot.filesystems) {
-      const row=element("div","","host-filesystem");
-      row.append(element("strong",fs.mount),element("span",`${format(fs.usedGiB)} / ${format(fs.totalGiB)} GiB · 여유 ${format(fs.freeGiB)} GiB`));
-      if(fs.usedPercent>=85) row.append(element("span","공간 부족 주의","host-warning"));
-      storage.append(row);
-    }
-    panel.append(storage,element("p",`최근 측정 ${new Date(snapshot.timestamp).toLocaleString('ko-KR')} · 자동 갱신`,"host-subtitle"));
-  }
+  if (snapshot?.available && snapshot.scope === "a1-host") hostDashboardLast = snapshot;
+  else if (snapshot?.last?.scope === "a1-host" && (!hostDashboardLast || snapshot.last.timestamp >= hostDashboardLast.timestamp)) hostDashboardLast = snapshot.last;
+  const panel = buildHostDashboard(snapshot, { last: hostDashboardLast });
+  // The transcript is a live region; only replace the panel when its words change.
+  const key = panel.textContent;
+  if (key === hostDashboardKey && els.messages.firstElementChild?.classList.contains("host-dashboard")) return;
+  hostDashboardKey = key;
   els.messages.replaceChildren(panel);
 }
 async function refreshRoom(force = false) {
@@ -759,7 +739,9 @@ async function refreshRoom(force = false) {
   state.pollBusy = true;
   try {
     if (roomId === MONITOR_ROOM) {
-      const snapshot = await api("/api/admin/monitor");
+      let snapshot;
+      try { snapshot = await api("/api/admin/monitor"); }
+      catch (error) { if (error.status) throw error; snapshot = { available: false, reason: "network" }; }
       if (state.selectedRoom === roomId && request === state.roomRequest) renderHostDashboard(snapshot);
       return;
     }
@@ -1876,26 +1858,8 @@ async function resetConversations(button, dialog = null) {
   } catch(error){if(state.session?.user?.id===userId&&sidebarEpoch===epoch)toast(error.message);}
   finally{if(button.isConnected)setBusy(button,false);}
 }
-async function openCapabilityHub() {
-  let dialog=$("#capability-hub");
-  if(!dialog){dialog=document.createElement("dialog");dialog.id="capability-hub";dialog.className="capability-hub";document.body.append(dialog);}
-  dialog.replaceChildren();
-  const title=document.createElement("h2");title.textContent="통합 관리";
-  const close=document.createElement("button");close.textContent="닫기";close.onclick=()=>dialog.close();dialog.append(title,close);
-  const sessions=document.createElement("section"), sessionTitle=document.createElement("h3"), sessionNote=document.createElement("p"), reset=document.createElement("button");
-  sessionTitle.textContent="대화 세션";
-  sessionNote.textContent="내 대화 목록을 비우고 새 세션을 시작합니다. 기존 기록은 ‘삭제한 대화’에서 복원할 수 있습니다.";
-  reset.textContent="대화 목록 초기화";
-  reset.onclick=()=>void resetConversations(reset,dialog);
-  sessions.append(sessionTitle,sessionNote,reset);dialog.append(sessions);dialog.showModal();
-  try {
-    const data=await api("/api/admin/capabilities");
-    for(const [name,items] of [["API",[...new Set(data.providers.map(p=>p.name))]],["Vault",data.services.map(s=>`${s.name} · ${s.configured?"키 등록됨":"미등록"}`)],["MCP",["연결된 MCP 서버 없음"]],["스킬",["실행 연결된 스킬 없음"]]]) {
-      const section=document.createElement("section"),h=document.createElement("h3");h.textContent=name;section.append(h);
-      for(const text of items){const row=document.createElement("p");row.textContent=text;section.append(row);}dialog.append(section);
-    }
-    const note=document.createElement("p");note.textContent=data.note;dialog.append(note);
-  }catch(error){const note=document.createElement("p");note.textContent=error.message;dialog.append(note);}
+function openCapabilityHub() {
+  return showCapabilityHub({ api, onReset: (button, dialog) => resetConversations(button, dialog) });
 }
 const modelChanges = new Map();
 function roomContextOwner(pane = null) {

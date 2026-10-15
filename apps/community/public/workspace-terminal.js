@@ -10,11 +10,21 @@ async function loadTerminal() {
   const [module]=await Promise.all([terminalModule,terminalStyle]);return module;
 }
 
+// Korean monospace fonts come first so the cell width is measured from a font
+// whose Hangul is exactly two cells wide; without them the system mono is used.
+export const TERMINAL_FONT='"D2Coding", "Noto Sans Mono CJK KR", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+// Every text color keeps at least 4.5:1 contrast on the background (#1f1d27).
+export const TERMINAL_THEME=Object.freeze({
+  background:'#1f1d27',foreground:'#e4e1ec',cursor:'#c8b4ee',cursorAccent:'#1f1d27',selectionBackground:'#7956b566',selectionForeground:'#ffffff',
+  black:'#8c879b',red:'#ff8b98',green:'#86d9a2',yellow:'#e9c56f',blue:'#8fb2ff',magenta:'#d6a4f5',cyan:'#74d3df',white:'#d9d5e3',
+  brightBlack:'#a19cb0',brightRed:'#ffa8b2',brightGreen:'#a3e8b9',brightYellow:'#f4d88f',brightBlue:'#b0c8ff',brightMagenta:'#e6bff9',brightCyan:'#9be5ee',brightWhite:'#f6f4fa',
+});
+
 /** A single authenticated remote PTY; closing the view disposes every local resource. */
 export async function createWorkspaceTerminal({mount,api,roomId,signal,onStatus=()=>{}}) {
   const {Terminal,FitAddon}=await loadTerminal();
   signal.throwIfAborted();
-  const term=new Terminal({cursorBlink:true,convertEol:false,scrollback:2000,fontSize:13,fontFamily:'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',disableStdin:true,theme:{background:'#111317',foreground:'#d7dde5',cursor:'#b9d4e8',selectionBackground:'#627b9655'}});
+  const term=new Terminal({cursorBlink:true,convertEol:false,scrollback:2000,fontSize:13,lineHeight:1.15,fontFamily:TERMINAL_FONT,disableStdin:true,theme:TERMINAL_THEME});
   const fit=new FitAddon();term.loadAddon(fit);term.open(mount);
   let socket,disposed=false,ready=false,closing=false,resizeTimer,queuedOutputBytes=0,closeReason=null;
   const MAX_QUEUED_OUTPUT_BYTES=1024*1024;

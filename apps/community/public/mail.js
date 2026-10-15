@@ -15,7 +15,14 @@ function dateLabel(value) {
 }
 
 export function createMailUI({ api, getSession, toast, openRoom }) {
-  let dialog, mailbox, list, detail, status, address, count, more, refresh, compose;
+  let dialog, mailbox, list, detail, detailPane, back, status, address, count, more, refresh, compose;
+  // Phones show the list and one message as alternating full views.
+  const narrow = () => !!globalThis.matchMedia?.("(max-width: 650px)").matches;
+  function setReading(reading) { dialog?.classList.toggle("is-reading", reading); }
+  function showList() {
+    setReading(false);
+    (list?.querySelector(".mail-item.is-selected") || list?.querySelector(".mail-item"))?.focus({ preventScroll: false });
+  }
   let epoch = 0, listRequest = 0, detailRequest = 0, configured = false, loading = false, sending = false;
   let messages = [], cursor = null, selectedId = null, selectedMessage = null, pendingSend = null;
   let agentSection, agentSummary, agentBody, agentForm, agentFields, agentRows, agentEnabled, agentSave, agentResult, agentJobs;
@@ -35,6 +42,7 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
     list?.replaceChildren(); detail?.replaceChildren();
     if (address) address.textContent = "";
     if (status) status.textContent = "";
+    setReading(false);
   }
   function reset() {
     clearPrivateState();
@@ -61,9 +69,16 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
     list = node("div", "mail-list");
     more = action("더 불러오기", () => void loadInbox(true), "text-button mail-more"); more.hidden = true;
     inbox.append(count, list, more);
-    detail = node("section", "mail-detail"); detail.setAttribute("aria-label", "메일 내용");
-    mailbox.append(inbox, detail); dialog.append(header, agentSection, status, mailbox);
-    dialog.addEventListener("cancel", event => { event.preventDefault(); reset(); });
+    detailPane = node("section", "mail-detail"); detailPane.setAttribute("aria-label", "메일 내용");
+    const bar = node("div", "mail-detail-bar");
+    back = action("← 받은 메일", showList, "text-button mail-back"); back.setAttribute("aria-label", "받은 메일 목록으로 돌아가기");
+    bar.append(back);
+    detail = node("div", "mail-detail-body");
+    detailPane.append(bar, detail);
+    mailbox.append(inbox, detailPane); dialog.append(header, agentSection, status, mailbox);
+    agentSection.addEventListener("toggle", () => dialog.classList.toggle("is-agent-open", agentSection.open));
+    // On phones Esc (and the Android back gesture) returns to the list before closing.
+    dialog.addEventListener("cancel", event => { event.preventDefault(); if (narrow() && dialog.classList.contains("is-reading") && configured) showList(); else reset(); });
     dialog.addEventListener("close", () => { if (!dialog.open) clearPrivateState(); });
     document.body.append(dialog);
   }
@@ -72,6 +87,7 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
     compose.disabled = !configured || sending;
     more.disabled = loading || sending;
     more.hidden = !cursor || !configured;
+    back.parentElement.hidden = !configured;
     dialog?.querySelectorAll(".mail-item").forEach(button => { button.disabled = sending; });
   }
   function emptyDetail(title, text) {
@@ -107,6 +123,7 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
       if (!configured) {
         messages = []; cursor = null; selectedId = null; selectedMessage = null; pendingSend = null; detailRequest += 1;
         emptyDetail("메일함을 연결해 주세요", "이 서버에 메일 연결 정보가 아직 등록되지 않았습니다. 설정의 ‘운영 메일’은 연락처 기록이며 메일함 연결은 별도로 필요합니다.");
+        setReading(true);
         status.textContent = "관리자 메일 연결이 필요합니다.";
       } else {
         const all = append ? [...messages, ...(Array.isArray(data.messages) ? data.messages : [])] : (Array.isArray(data.messages) ? data.messages : []);
@@ -129,6 +146,8 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
     const requestEpoch = epoch, userId = getSession().user.id, sequence = ++detailRequest;
     selectedId = id; selectedMessage = null; pendingSend = null;
     renderList(); emptyDetail("메일을 불러오고 있어요…", "");
+    setReading(true); detailPane.scrollTop = 0;
+    if (narrow()) back.focus({ preventScroll: true });
     try {
       const message = await api(`/api/admin/mail/messages/${encodeURIComponent(id)}`);
       if (!current(requestEpoch, userId) || sequence !== detailRequest) return;
@@ -159,6 +178,7 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
   function startCompose(reply = null) {
     if (!configured || sending || !isAdmin()) return;
     detailRequest += 1; pendingSend = null; selectedId = reply?.id || null; renderList(); detail.replaceChildren();
+    setReading(true); detailPane.scrollTop = 0;
     const header = node("div", "mail-compose-header"); header.append(node("h3", "", reply ? "답장 쓰기" : "새 메일"));
     const form = node("form", "mail-compose");
     const fields = node("fieldset");
@@ -173,7 +193,7 @@ export function createMailUI({ api, getSession, toast, openRoom }) {
     const text = input("내용", "text", "textarea"); text.maxLength = 40000; text.rows = 12;
     const result = node("p", "mail-compose-status"); result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
     const buttons = node("div", "mail-compose-actions");
-    const cancel = action("취소", () => { pendingSend = null; if (reply) renderMessage(reply); else emptyDetail("메일을 선택하세요", "받은 메일을 선택하거나 새 메일을 작성하세요."); });
+    const cancel = action("취소", () => { pendingSend = null; if (reply) renderMessage(reply); else { emptyDetail("메일을 선택하세요", "받은 메일을 선택하거나 새 메일을 작성하세요."); if (narrow()) showList(); } });
     const send = action("메일 보내기", null, "primary-button"); send.type = "submit"; buttons.append(cancel, send);
     form.append(fields, result, buttons);
     form.addEventListener("submit", async event => {
