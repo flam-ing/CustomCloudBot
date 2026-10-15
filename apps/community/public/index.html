@@ -516,14 +516,14 @@
         </div>
       </form>
     </dialog>
-    <dialog id="pwa-dialog" class="modal">
+    <dialog id="pwa-dialog" class="modal" aria-labelledby="pwa-dialog-title">
       <form method="dialog">
         <div class="modal-head">
           <h2 id="pwa-dialog-title">앱 설치 및 알림</h2>
           <button class="icon-button modal-close" type="submit" aria-label="닫기">×</button>
         </div>
         <p id="pwa-dialog-message" class="modal-copy"></p>
-        <div class="modal-actions"><button class="primary-button" type="submit">확인</button></div>
+        <div class="modal-actions"><button class="primary-button" type="submit" autofocus>확인</button></div>
       </form>
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

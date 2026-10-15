@@ -232,3 +232,237 @@ select option { background: #faf8ff; color: var(--text); }
 }
 .bot-option > .icon { margin-right: var(--space-1); }
 
+/* --------------------------------------------------------------- buttons */
+/* Four kinds, two sizes. The shared .btn classes are for new markup; the
+   older class names in the app map onto the same look. */
+.btn, .primary-button, .outline-button, .routine-button, .notification-setting-button,
+.archived-dialog-row button, .voice-call-controls button, .model-change-actions button,
+.sidebar-dialog-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  line-height: 1.25;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  filter: none;
+}
+.btn-sm, .routine-actions .routine-button, .routine-delete-confirm .routine-button,
+.archived-dialog-row button, .token-box .outline-button {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+.btn:disabled, .primary-button:disabled, .outline-button:disabled, .routine-button:disabled,
+.model-change-actions button:disabled, .sidebar-dialog-actions button:disabled,
+.voice-call-controls button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Primary: the one main action in a place. */
+.btn-primary, .primary-button, .sidebar-dialog-actions button[type="submit"],
+.branch-merge-dialog .sidebar-dialog-actions button[type="submit"],
+.model-change-actions button:first-child, .voice-call-controls .voice-start,
+.routine-form-actions .routine-button.routine-primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(101, 66, 150, .18);
+}
+.btn-primary:hover:not(:disabled), .primary-button:hover:not(:disabled),
+.sidebar-dialog-actions button[type="submit"]:hover:not(:disabled),
+.branch-merge-dialog .sidebar-dialog-actions button[type="submit"]:hover:not(:disabled),
+.model-change-actions button:first-child:hover:not(:disabled),
+.voice-call-controls .voice-start:hover:not(:disabled),
+.routine-form-actions .routine-button.routine-primary:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--accent-strong);
+  box-shadow: 0 2px 8px rgba(101, 66, 150, .18);
+}
+
+/* Secondary: framed, quieter actions beside the main one. */
+.btn-secondary, .outline-button, .routine-button, .notification-setting-button,
+.archived-dialog-row button, .voice-call-controls button, .model-change-actions button,
+.routines-toolbar .routine-button.routine-primary {
+  color: var(--text);
+  background: var(--button-bg);
+  border-color: var(--line-strong);
+  box-shadow: none;
+}
+.routines-toolbar .routine-button.routine-primary { color: var(--accent-strong); }
+.btn-secondary:hover:not(:disabled), .outline-button:hover:not(:disabled),
+.routine-button:hover:not(:disabled), .notification-setting-button:hover:not(:disabled),
+.archived-dialog-row button:hover:not(:disabled), .voice-call-controls button:hover:not(:disabled),
+.model-change-actions button:hover:not(:disabled),
+.routines-toolbar .routine-button.routine-primary:hover:not(:disabled) {
+  background: var(--button-bg-hover);
+  border-color: rgba(121, 86, 181, .40);
+  box-shadow: none;
+}
+
+/* Ghost: cancel and minor actions, no frame until pointed at. */
+.btn-ghost, .text-button, .model-change-actions button:last-child,
+.sidebar-dialog-actions button:not([type="submit"]) {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--accent-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+.btn-ghost:hover:not(:disabled), .text-button:hover:not(:disabled),
+.model-change-actions button:last-child:hover:not(:disabled),
+.sidebar-dialog-actions button:not([type="submit"]):hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+  box-shadow: none;
+}
+/* A lone cancel at the end of a list dialog sits at the bottom right. */
+.sidebar-dialog > button:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 72px;
+  min-height: var(--control-h);
+  margin: var(--space-4) 0 0 auto;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  text-align: center;
+}
+.sidebar-dialog > button:last-child:hover:not(:disabled) { background: var(--hover); }
+
+/* Danger: removing or ending something. */
+.btn-danger, .voice-call-controls .voice-end, .routine-delete-confirm .routine-button.routine-delete {
+  color: #fff;
+  background: var(--danger);
+  border-color: transparent;
+}
+.btn-danger:hover:not(:disabled), .voice-call-controls .voice-end:hover:not(:disabled),
+.routine-delete-confirm .routine-button.routine-delete:hover:not(:disabled) {
+  color: #fff;
+  background: var(--danger-strong);
+  border-color: transparent;
+}
+.routine-actions .routine-button.routine-delete { color: var(--danger-text); }
+
+/* Square icon button for new markup. */
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+}
+.icon-btn:hover:not(:disabled) { background: var(--icon-hover-bg); color: var(--accent-strong); }
+
+/* --------------------------------------------------------- dialog chrome */
+/* Shared frame: 22px corners, 24px inside, an 18px title and a round close. */
+.modal, .sidebar-dialog, .room-sharing-dialog, .archived-dialog, .routines-dialog,
+.voice-call-dialog, .setup-dialog, .model-browser, .model-change-dialog {
+  border-width: 1px;
+  border-style: solid;
+  border-radius: var(--radius-xl);
+  max-height: calc(100dvh - 32px);
+}
+.sidebar-dialog, .archived-dialog, .model-change-dialog, .voice-call-dialog,
+.model-browser { padding: var(--space-6); }
+.modal form, .room-sharing-form, .routines-shell { padding: var(--space-6); }
+.setup-header { padding: var(--space-6) var(--space-6) var(--space-3); }
+.setup-content { padding: var(--space-5) var(--space-6) var(--space-6); }
+.setup-status { padding: 0 var(--space-6); }
+.modal-head { margin-bottom: var(--space-5); }
+.modal-actions, .sidebar-dialog-actions, .routine-form-actions { gap: var(--space-2); }
+.modal-actions, .sidebar-dialog-actions { margin-top: var(--space-6); }
+/* Popovers and menus use the next corner size down. */
+.context-popover, .notification-panel, .profile-menu, .quick-model-picker, .bot-picker { border-radius: var(--radius-lg); }
+.dock-menu { border-radius: var(--radius-md); }
+
+/* Every close control looks the same: a round 36px button with one X. */
+.modal-head .modal-close, .routine-close, .setup-close, .room-sharing-header > button,
+.archived-dialog header > button, .notification-close, .voice-call-top .voice-minimize {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  line-height: 1;
+  box-shadow: none;
+}
+.modal-head .modal-close:hover, .routine-close:hover, .setup-close:hover,
+.room-sharing-header > button:hover, .archived-dialog header > button:hover,
+.notification-close:hover, .voice-call-top .voice-minimize:hover {
+  background: var(--icon-hover-bg);
+  color: var(--accent-strong);
+}
+/* A text "×" or "⌄" stays as the button's content for screen readers but is
+   moved out of view; the same drawn mark as the icon close takes its place. */
+.modal-head .modal-close:not(:has(svg)), .routine-close, .setup-close,
+.room-sharing-header > button, .archived-dialog header > button, .notification-close,
+.voice-call-top .voice-minimize {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-indent: 100%;
+}
+.modal-head .modal-close:not(:has(svg))::before, .routine-close::before, .setup-close::before,
+.room-sharing-header > button::before, .archived-dialog header > button::before,
+.notification-close::before, .voice-call-top .voice-minimize::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  background: currentColor;
+  -webkit-mask: var(--icon-close) center / contain no-repeat;
+  mask: var(--icon-close) center / contain no-repeat;
+}
+.voice-call-top .voice-minimize::before {
+  -webkit-mask-image: var(--icon-chevron-down);
+  mask-image: var(--icon-chevron-down);
+}
+.modal-head .modal-close .icon { width: var(--icon-md); height: var(--icon-md); }
+
+@media (max-width: 520px) {
+  .modal, .sidebar-dialog, .room-sharing-dialog, .archived-dialog, .routines-dialog,
+  .voice-call-dialog, .setup-dialog, .model-browser, .model-change-dialog { border-radius: var(--radius-lg); }
+  .sidebar-dialog, .archived-dialog, .model-change-dialog, .voice-call-dialog, .model-browser,
+  .modal form, .room-sharing-form, .routines-shell { padding: var(--space-5); }
+  .setup-header { padding: var(--space-5) var(--space-5) var(--space-3); }
+  .setup-content { padding: var(--space-4) var(--space-5) var(--space-5); }
+  .setup-status { padding: 0 var(--space-5); }
+}
+
