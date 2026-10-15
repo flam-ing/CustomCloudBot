@@ -207,6 +207,7 @@
         <aside id="sidebar" class="sidebar" aria-label="대화 목록" tabindex="-1">
           <div id="sidebar-resizer" class="sidebar-resizer" role="separator" tabindex="0" aria-label="대화 목록 너비 조절" aria-controls="sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="420" aria-valuenow="280" aria-disabled="true"></div>
           <div class="sidebar-top">
+            <div id="agent-presence" class="agent-presence" aria-label="에이전트"></div>
             <button id="create-room-button" class="sidebar-new" type="button">
               <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>새 대화</span>
             </button>
@@ -227,8 +228,7 @@
             <input id="room-search" type="search" placeholder="대화 이름으로 찾기" aria-label="대화 이름으로 찾기" autocomplete="off" enterkeyhint="search" />
             <button id="room-search-close" type="button" aria-label="찾기 닫기"><svg class="icon" aria-hidden="true"><use href="#i-close" /></svg></button>
           </div>
-          <div class="sidebar-heading branch-heading"><span>가지</span><div class="branch-heading-actions"><button id="branch-fork" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-fork" /></svg>Fork</button><button id="branch-merge" type="button" disabled>Merge</button></div><button id="create-sidebar-group" type="button" hidden disabled>+ 그룹</button></div>
-          <p id="branch-current" class="branch-current">새 줄기에서 시작하세요</p>
+          <button id="create-sidebar-group" type="button" hidden disabled>+ 그룹</button>
           <nav id="room-list" class="room-list" aria-label="대화 분기 그래프"></nav>
           <div class="sidebar-bottom">
             <div class="profile-row">
@@ -283,7 +283,6 @@
               <span class="room-info-meta"><span id="room-info-meta"></span><span class="room-info-demo">데모 · 실제 AI 미연결</span></span>
             </button>
             </div>
-            <div id="agent-presence" class="agent-presence" aria-label="에이전트"></div>
             <span id="mobile-room-title" class="sr-only"></span
             ><span id="room-kicker" class="sr-only"></span>
             <div class="topbar-actions">
@@ -311,10 +310,10 @@
               >
                 <svg class="icon"><use href="#i-invite" /></svg>
               </button>
-              <div id="notification-center"></div>
               <button id="voice-call-button" class="icon-button voice-call-button" type="button" aria-label="이 대화에 전화하기" title="이 대화에 전화하기"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg></button>
             </div>
           </header>
+          <div class="workspace-notifications"><div id="notification-center"></div></div>
           <div id="pane-grid" class="pane-grid" data-panes="1">
           <section id="empty-state" class="empty-state is-hidden">
             <h2>새 대화</h2>

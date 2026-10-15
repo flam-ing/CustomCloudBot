@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutBranches, relatedBranchIds} from '../public/branch-graph.mjs';
+import {layoutBranches, relatedBranchIds, branchGraphGeometry, branchDisplayName} from '../public/branch-graph.mjs';
 const rooms = ['root','a','b','deep','merge','other'].map((id, i) => ({id, name:id, createdAt:i+1}));
 const links = [{id:'a',parent:'root'},{id:'b',parent:'root'},{id:'deep',parent:'a'},{id:'merge',parent:'deep',mergedFrom:'b'}];
 test('parents precede children and a merge retains both real parents and colored lanes', () => {
@@ -64,4 +64,77 @@ test('manual order preserves search ancestors even when they follow the matching
   assert.deepEqual(result.rows.map(row=>row.id),['merge','deep','b','a','root']);
   assert.deepEqual(result.rows.filter(row=>row.matched).map(row=>row.id),['merge']);
   assert.deepEqual(result.edges,layoutBranches(rooms,links,{query:'merge'}).edges);
+});
+
+
+test('default graph keeps connected work together instead of stretching a merge across unrelated roots', () => {
+  const r = [{id:'root',createdAt:1},{id:'other',createdAt:2},{id:'a',createdAt:3},{id:'b',createdAt:4},{id:'deep',createdAt:5},{id:'merge',createdAt:6}];
+  const result = layoutBranches(r, links);
+  assert.deepEqual(result.rows.map(row => row.id), ['root','a','deep','b','merge','other']);
+  assert.ok(result.laneCount <= 2);
+  assert.deepEqual(layoutBranches(r, links, {order:['root','other','a','b','deep','merge']}).rows.map(row => row.id), ['root','other','a','b','deep','merge']);
+});
+
+test('graph geometry routes long links around intervening session nodes in either order', () => {
+  const rows = ['root','unrelated','merge'].map((id,index)=>({id,lane:0,index}));
+  const edge = {from:'root',to:'merge',secondary:true};
+  const result = branchGraphGeometry({rows,edges:[edge],laneCount:1});
+  assert.equal(result.nodes.length,3);
+  assert.equal(result.paths.length,1);
+  assert.equal(result.height,168);
+  assert.ok(result.width >= 32);
+  assert.match(result.paths[0].d, /^M10,28C/);
+  assert.ok(result.paths[0].d.endsWith('10,140'));
+  assert.ok(!result.paths[0].d.includes('V140'), 'do not draw directly through the middle node');
+  const reverse = branchGraphGeometry({rows:[...rows].reverse().map((row,index)=>({...row,index})),edges:[edge],laneCount:1});
+  assert.match(reverse.paths[0].d, /^M10,140C/);
+  assert.ok(reverse.paths[0].d.endsWith('10,28'));
+  assert.deepEqual(result.paths[0].from,edge.from);
+  assert.deepEqual(result.paths[0].to,edge.to);
+  assert.equal(result.paths[0].secondary,true);
+});
+
+test('graph geometry keeps adjacent links direct and ignores missing endpoints', () => {
+  const rows = [{id:'a',lane:0,index:0},{id:'b',lane:0,index:1}];
+  const result = branchGraphGeometry({rows,edges:[{from:'a',to:'b'},{from:'hidden',to:'b'}],laneCount:1});
+  assert.equal(result.paths.length,1);
+  assert.equal(result.paths[0].d,'M10,28V84');
+  assert.equal(result.width,30);
+  assert.deepEqual(branchGraphGeometry({rows:[],edges:[],laneCount:0}),{nodes:[],paths:[],width:30,height:0});
+});
+
+
+test('many simultaneous branches and merge routes fit the sidebar without changing vertical geometry', () => {
+  const rows = Array.from({length:48},(_,index)=>({id:'branch-'+index,lane:index%12,index}));
+  const edges = Array.from({length:12},(_,index)=>({from:'branch-'+index,to:'branch-'+(index+36),secondary:true}));
+  const graph = {rows,edges,laneCount:12};
+  const wide = branchGraphGeometry(graph,{maxWidth:1000}), compact = branchGraphGeometry(graph);
+  assert.ok(wide.width > 72);
+  assert.equal(compact.width,72);
+  assert.equal(branchGraphGeometry(graph,{maxWidth:52}).width,52);
+  assert.deepEqual(compact.nodes.map(node=>node.y),wide.nodes.map(node=>node.y));
+  assert.deepEqual(compact.paths.map(path=>[path.from,path.to,path.secondary]),wide.paths.map(path=>[path.from,path.to,path.secondary]));
+  for (const node of compact.nodes) assert.ok(node.x >= 10 && node.x <= 60);
+  const byId = new Map(compact.nodes.map(node=>[node.id,node]));
+  for (const path of compact.paths) {
+    const from = byId.get(path.from), to = byId.get(path.to);
+    assert.ok(path.d.startsWith(`M${from.x},${from.y}`));
+    assert.ok(path.d.endsWith(`${to.x},${to.y}`) || path.d.endsWith(`V${to.y}`));
+    for (const [,x] of path.d.matchAll(/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g)) assert.ok(Number(x) >= 10 && Number(x) <= 60);
+  }
+  assert.deepEqual(graph.rows,rows);
+});
+
+test('display names remove generated trailing lineage only for recorded fork or merge rows', () => {
+  const named = (name,operation)=>({room:{name},operation});
+  assert.equal(branchDisplayName(named('신규 대화 시작 · Fork · Fork · Merge','merge')),'신규 대화 시작');
+  assert.equal(branchDisplayName(named('새 대화 · Fork','fork')),'새 대화');
+  assert.equal(branchDisplayName(named('새 대화 · Merge','merge')),'새 대화');
+  assert.equal(branchDisplayName(named('Git · Fork','root')),'Git · Fork');
+  assert.equal(branchDisplayName(named('Merge 설계 · 최종','merge')),'Merge 설계 · 최종');
+  assert.equal(branchDisplayName(named('사용자가 정한 Fork 계획','fork')),'사용자가 정한 Fork 계획');
+  assert.equal(branchDisplayName(named(' · Fork','fork')),' · Fork');
+  const row = Object.freeze({room:Object.freeze({name:'작업 · Fork · Merge'}),operation:'merge'});
+  assert.equal(branchDisplayName(row),'작업');
+  assert.equal(row.room.name,'작업 · Fork · Merge');
 });

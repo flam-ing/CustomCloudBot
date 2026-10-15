@@ -10,7 +10,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return {promise, resolve, reject}; };
 function setup({apiResult, acquire, resume, native = false} = {}) {
   class Element {
-    constructor(tag) { this.tagName = tag; this.dataset = {}; this.handlers = {}; this.attributes = {}; this.nodes = new Map(); this.hidden = false; this.disabled = false; this.textContent = ''; this.classList = {add() {}, remove() {}}; }
+    constructor(tag) { this.tagName = tag; this.dataset = {}; this.handlers = {}; this.attributes = {}; this.nodes = new Map(); this.hidden = false; this.disabled = false; this.textContent = ''; this.classList = {add() {}, remove() {}}; this.style = {setProperty() {}}; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, action) { this.handlers[name] = action; }
     querySelector(selector) { if (!this.nodes.has(selector)) this.nodes.set(selector, new Element(selector)); return this.nodes.get(selector); }
@@ -51,8 +51,88 @@ function setup({apiResult, acquire, resume, native = false} = {}) {
   };
   const ui = context.createVoiceCall({api: async (path, options) => { calls.push({path, options}); return apiResult ? apiResult(path, options, defaultApi) : defaultApi(path, options); }, getSession: () => userId ? {user: {id: userId}} : null, getRoom: id => rooms.find(room => room.id === id), getSelection: () => ({botIds: ['assistant'], model: 'selected-model', effort: 'high'}), onMessages: id => updates.push(id), toast: text => toasts.push(text)});
   const dialog = children[0];
-  return {ui, rooms, calls, updates, streams, recorders, contexts, spoken, nativeMessages, timers, toasts, document, window, node: selector => dialog.querySelector(selector), get stage() { return dialog.dataset.stage; }, async start(room = rooms[0]) { ui.open(room); dialog.querySelector('.voice-start').onclick(); await tick(); }, click(selector) { dialog.querySelector(selector).onclick(); }, setUser(id) { userId = id; }, sample(rms, elapsed = 60) { now += elapsed; contexts.at(-1).rms = rms; for (const timer of [...timers.values()]) if (timer.interval && timer.ms === 60) timer.fn(); }, phrase() { for (let i = 0; i < 3; i++) this.sample(0.1); }, async endPhrase() { this.phrase(); this.click('.voice-send'); await tick(); }, emitNative(detail) { window.handlers['cloudbot:native-call']({detail}); }, nativeEvent(action, roomId = 'one') { window.handlers['cloudbot:native-call']({detail: {action, roomId}}); }};
+  return {ui, rooms, calls, updates, streams, recorders, contexts, spoken, nativeMessages, timers, toasts, document, window, location: context.location, dialog, pill: children[1], node: selector => dialog.querySelector(selector), get stage() { return dialog.dataset.stage; }, async start(room = rooms[0]) { ui.open(room); await tick(); }, click(selector) { dialog.querySelector(selector).onclick(); }, setUser(id) { userId = id; }, sample(rms, elapsed = 60) { now += elapsed; contexts.at(-1).rms = rms; for (const timer of [...timers.values()]) if (timer.interval && timer.ms === 60) timer.fn(); }, phrase() { for (let i = 0; i < 3; i++) this.sample(0.1); }, async endPhrase() { this.phrase(); this.click('.voice-send'); await tick(); }, emitNative(detail) { window.handlers['cloudbot:native-call']({detail}); }, nativeEvent(action, roomId = 'one') { window.handlers['cloudbot:native-call']({detail: {action, roomId}}); }};
 }
+
+test('phone button starts once immediately; reopening its screen does not acquire a second microphone', async () => {
+  const app = setup();
+  app.ui.open(app.rooms[0]);
+  assert.equal(app.dialog.open, true);
+  assert.equal(app.stage, 'connecting');
+  assert.equal(app.node('.voice-start').hidden, true);
+  app.ui.open(app.rooms[0]);
+  await tick();
+  assert.equal(app.stage, 'listening');
+  assert.equal(app.calls.filter(call => call.path === '/api/voice').length, 1);
+  assert.equal(app.streams.length, 1);
+  assert.equal(app.node('h2').textContent, '서버 관리');
+  assert.match(app.node('.voice-call-time').textContent, /^0:0[0-9]$/);
+  app.ui.reset();
+});
+
+test('opening a phone screen without a signed-in user never starts audio or a request', async () => {
+  const app = setup(); app.setUser(null); app.ui.open(app.rooms[0]); await tick();
+  assert.equal(app.dialog.open, undefined); assert.equal(app.ui.roomId, null);
+  assert.equal(app.calls.length, 0); assert.equal(app.streams.length, 0);
+  assert.match(app.toasts.at(-1), /로그인/);
+});
+
+test('an external call link waits for an audio gesture but preserves the exact linked conversation', async () => {
+  const app = setup(); app.location.href = 'https://bots.example.org/?room=two&call=1';
+  app.ui.handleLink(); await tick();
+  assert.equal(app.dialog.open, true);
+  assert.equal(app.stage, 'ready');
+  assert.equal(app.node('.voice-start').hidden, false);
+  assert.equal(app.calls.length, 0); assert.equal(app.streams.length, 0);
+  app.click('.voice-start'); await tick();
+  assert.equal(app.ui.roomId, 'two');
+  assert.equal(app.calls.some(call => call.path === '/api/rooms/two'), true);
+  app.ui.reset();
+});
+
+test('minimizing keeps the same call; hangup returns to chat and releases capture', async () => {
+  const app = setup(); await app.start();
+  app.click('.voice-minimize');
+  assert.equal(app.dialog.open, false); assert.equal(app.pill.hidden, false);
+  assert.equal(app.ui.roomId, 'one'); assert.equal(app.streams[0].track.stops, 0);
+  app.pill.onclick();
+  assert.equal(app.dialog.open, true); assert.equal(app.pill.hidden, true);
+  app.click('.voice-end');
+  assert.equal(app.dialog.open, false); assert.equal(app.pill.hidden, true);
+  assert.equal(app.ui.roomId, null); assert.equal(app.streams[0].track.stops, 1);
+  assert.equal(app.timers.size, 0);
+});
+
+test('automatic start preserves microphone permission failures and offers an explicit retry', async () => {
+  let attempts = 0;
+  const app = setup({acquire: create => ++attempts === 1 ? Promise.reject(new DOMException('Denied', 'NotAllowedError')) : Promise.resolve(create())});
+  await app.start();
+  assert.equal(app.stage, 'ended'); assert.equal(app.ui.roomId, null);
+  assert.equal(app.dialog.open, true); assert.equal(app.node('.voice-start').hidden, false);
+  assert.match(app.node('.voice-call-status').textContent, /마이크 권한/);
+  assert.equal(app.calls.some(call => call.path.endsWith('/messages')), false);
+  app.click('.voice-start'); await tick();
+  assert.equal(app.stage, 'listening'); assert.equal(attempts, 2);
+  app.click('.voice-mute');
+  assert.equal(app.node('.voice-mute').attributes['aria-label'], '마이크 켜기');
+  assert.equal(app.node('.voice-mute').attributes['aria-pressed'], 'true');
+  app.ui.reset();
+});
+
+test('unavailable capabilities or room access never request microphone capture', async () => {
+  for (const failure of ['busy', 'forbidden', 'not-configured']) {
+    const app = setup({apiResult: (path, options, fallback) => {
+      if (failure === 'not-configured' && path === '/api/voice') return {configured: false};
+      if (path === '/api/rooms/one' && failure === 'busy') return {busy: true};
+      if (path === '/api/rooms/one' && failure === 'forbidden') throw Object.assign(new Error('권한이 없어요'), {status: 403});
+      return fallback(path, options);
+    }});
+    await app.start();
+    assert.equal(app.stage, 'ended'); assert.equal(app.ui.roomId, null);
+    assert.equal(app.streams.length, 0); assert.equal(app.timers.size, 0);
+    app.ui.reset();
+  }
+});
 
 test('navigation keeps the call, transcript, message request and spoken reply bound to its original room', async () => {
   const app = setup(); await app.start();
@@ -246,7 +326,7 @@ test('native v2 owns all audio and requests; web buttons send only room-bound co
   app.click('.voice-send'); assert.equal(app.nativeMessages.at(-1).action, 'finish');
   app.click('.voice-mute'); assert.equal(app.nativeMessages.at(-1).action, 'mute'); assert.equal(app.nativeMessages.at(-1).muted, true);
   app.emitNative({action: 'state', roomId: 'one', userId: 'owner', state: 'muted', muted: true});
-  assert.equal(app.node('.voice-mute').textContent, '마이크 켜기');
+  assert.equal(app.node('.voice-mute').attributes['aria-label'], '마이크 켜기');
   assert.equal(app.recorders.length, 0); assert.equal(app.spoken.length, 0); assert.equal(app.calls.length, 0);
   app.ui.reset(); assert.equal(app.nativeMessages.some(item => item.action === 'logout'), true); assert.equal(app.timers.size, 0);
 });

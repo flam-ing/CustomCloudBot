@@ -13,7 +13,7 @@ import { createInviteLink, createInviteLinks } from "/invite-links.mjs";
 import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
-import { layoutBranches } from "/branch-graph.mjs";
+import { layoutBranches, branchGraphGeometry, branchDisplayName } from "/branch-graph.mjs";
 import { createMenu, createNavigationShell, sortMembers, filterMembers, memberRoleLabel, branchRowMeta, handleMenuKeys } from "/navigation.mjs";
 import { sessionColors } from "/session-colors.js";
 import { createRoutineUI } from "/routines.js";
@@ -37,6 +37,7 @@ const state = {
   botChoiceTouched: false,
   pollTimer: null,
   pollBusy: false,
+  activityBusy: false,
   sending: false,
   pendingSend: null,
   roomRequest: 0,
@@ -362,6 +363,7 @@ async function loadSession() {
 }
 $("#startup-retry").addEventListener("click", loadSession);
 function showAuth() {
+  closeComposerPopover(false);
   voiceUI?.reset();
   messageQueueUI?.reset();
   messageQueueUI?.render($("#composer-form"), null);
@@ -440,6 +442,7 @@ async function enterWorkspace() {
   notificationUI?.setSession(state.session);
   agentPresence?.set("idle", true);
   pwaUI?.setSession(state.session);
+  closeComposerPopover(false);
   resetSidebarState(user.id);
   const workspaceEpoch=sidebarEpoch;
   await Promise.all([loadSidebar(),loadRooms()]);
@@ -748,24 +751,22 @@ function renderRooms() {
     els.roomList.removeAttribute("aria-busy");
     const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder, query:roomQuery});
     const graphList = document.createElement("div"); graphList.className = "branch-graph";
-    const width = Math.min(72, Math.max(30, graph.laneCount * 13 + 12)), step = graph.laneCount > 1 ? (width - 18) / (graph.laneCount - 1) : 0;
-    graphList.style.setProperty("--branch-rail", width + "px");
-    const svg = branchSvg("svg", {class:"branch-lines", width, height:graph.rows.length * 56, "aria-hidden":"true"});
-    const byId = new Map(graph.rows.map(row => [row.id,row])), x = row => 9 + row.lane * step, y = row => row.index * 56 + 28;
-    for (const edge of graph.edges) {
-      const from = byId.get(edge.from), to = byId.get(edge.to), fromX=x(from), toX=x(to), end=y(to), start=y(from);
-      const direction = end >= start ? 1 : -1;
-      const d = fromX === toX ? `M${fromX},${start}V${end}` : `M${fromX},${start}V${end-18*direction}Q${fromX},${end} ${(fromX+toX)/2},${end}H${toX}`;
-      svg.append(branchSvg("path", {d, style:`--branch-color:${colors.get(from.id)?.color || "currentColor"}`, class:`branch-path branch-color-${from.lane % 3}${edge.secondary ? " is-merge" : ""}`}));
+    const geometry = branchGraphGeometry(graph);
+    graphList.style.setProperty("--branch-rail", geometry.width + "px");
+    const svg = branchSvg("svg", {class:"branch-lines", width:geometry.width, height:geometry.height, "aria-hidden":"true"});
+    const byId = new Map(graph.rows.map(row => [row.id,row]));
+    for (const edge of geometry.paths) {
+      svg.append(branchSvg("path", {d:edge.d, style:`--branch-color:${colors.get(edge.to)?.color || "currentColor"}`, class:`branch-path${edge.secondary ? " is-merge" : ""}${edge.from===currentBranchId()||edge.to===currentBranchId()?" is-current":""}`}));
     }
+    const positions = new Map(geometry.nodes.map(node => [node.id,node]));
     for (const row of graph.rows) {
-      const active = currentBranchId() === row.id;
-      svg.append(branchSvg("circle", {cx:x(row), cy:y(row), r:active?5:3.5, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node branch-color-${row.lane % 3}${active?" is-selected":""}`}));
+      const active = currentBranchId() === row.id, position = positions.get(row.id);
+      svg.append(branchSvg("circle", {cx:position.x, cy:position.y, r:active?4:3, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node${active?" is-selected":""}`,"data-activity-room":row.id}));
       const item = document.createElement("div"); item.className = "branch-item";
       const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
       button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
       const copy=document.createElement("span"); copy.className="branch-row-copy";
-      const name=document.createElement("strong"); name.textContent=row.room.name;
+      const name=document.createElement("strong"); name.textContent=branchDisplayName(row);
       const meta=document.createElement("small"), parentNames=row.parents.map(id=>byId.get(id)?.room.name).filter(Boolean);
       meta.textContent=branchRowMeta({operation:row.operation, parentNames, room:row.room});
       button.title = "끌어서 순서 이동 · 다른 대화 위에 놓으면 Merge · 대화 화면에 놓으면 나란히 보기";
@@ -781,6 +782,7 @@ function renderRooms() {
     if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=roomQuery.trim()?`‘${roomQuery.trim()}’ 검색 결과가 없어요.`:"아직 대화가 없어요. 위의 ‘새 대화’로 시작해 보세요.";els.roomList.append(empty); }
   }
   syncSessionColors(colors);
+  syncSessionActivity();
   if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
 }
 function openArchivedConversations() {
@@ -798,6 +800,7 @@ function openArchivedConversations() {
   dialog.addEventListener("close", () => { dialog.remove(); $("#profile-customize").focus(); }); document.body.append(dialog); dialog.showModal();
 }
 function showEmpty() {
+  closeComposerPopover(false);
   clearPendingAttachments();
   state.selectedRoom = null;
   state.roomData = null;
@@ -814,6 +817,7 @@ function showEmpty() {
   renderRooms();
 }
 async function selectRoom(id) {
+  closeComposerPopover(false);
   if (!id) return;
   closeContextPopover();
   const previous = state.selectedRoom;
@@ -921,11 +925,35 @@ async function refreshRoom(force = false) {
     if (request === state.roomRequest) state.pollBusy = false;
   }
 }
+function syncSessionActivity() {
+  const nodes=new Map($$("[data-activity-room]",els.roomList).map(node=>[node.dataset.activityRoom,node]));
+  for(const row of $$(".branch-row",els.roomList)) {
+    const id=row.dataset.roomId, room=state.rooms.find(room=>room.id===id);
+    const pane=state.extra.find(pane=>pane.roomId===id);
+    const busy=(state.selectedRoom===id?state.sending||state.roomData?.busy:pane?.sending||pane?.data?.busy)||room?.busy;
+    row.classList.toggle("is-working",!!busy);
+    nodes.get(id)?.classList.toggle("is-working",!!busy);
+    if(busy)row.setAttribute("aria-description","작업 진행 중");else row.removeAttribute("aria-description");
+  }
+}
+async function refreshSidebarActivity() {
+  const userId=state.session?.user?.id,epoch=sidebarEpoch;if(!userId||state.activityBusy||document.hidden)return;
+  state.activityBusy=true;
+  try {
+    const data=await api("/api/rooms/activity");
+    if(userId!==state.session?.user?.id||epoch!==sidebarEpoch)return;
+    const activity=new Map(data.rooms.map(room=>[room.id,room.busy]));
+    for(const room of state.rooms)room.busy=!!activity.get(room.id);
+    syncSessionActivity();
+  } catch { /* The next normal poll retries; unavailable status is not a chat error. */ }
+  finally {state.activityBusy=false;}
+}
 function startPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(() => {
     refreshRoom();
     refreshExtras();
+    void refreshSidebarActivity();
   }, 3000);
 }
 function stopPolling() {
@@ -935,6 +963,8 @@ function stopPolling() {
 }
 function observeRoomOutcome(data) {
   const roomId=data?.room?.id; if(!roomId)return;
+  const listed=state.rooms.find(room=>room.id===roomId);if(listed)listed.busy=!!data.busy;
+  syncSessionActivity();
   const outcome=failedOutcome(data.messages);
   if(presenceTurns.has(roomId) && presenceTurns.get(roomId)!==outcome.humanId)presenceErrors.delete(roomId);
   presenceTurns.set(roomId,outcome.humanId);
@@ -2166,7 +2196,7 @@ function contextElement(tag, text, className) {
 }
 function renderContextMeter(context, form = $("#composer-form"), pane = null) {
   if(!form)return;
-  const toolbar=$(".model-controls",form);
+  const toolbar=$(".composer-tools",form);
   if(!toolbar)return;
   let bar=$(".context-controls",form);
   if(!bar) {
@@ -2387,12 +2417,14 @@ function composerBlocked(pane = null) {
 }
 function updateModelAvailability() {
   updateBranchControls();
+  syncSessionActivity();
   updateAgentPresence();
   for(const select of $$(".model-select")) {
     const pane=select._pane||null,owner=roomContextOwner(pane);
     const disabled=!owner.roomId||owner.busy;
     select.disabled=disabled;
     if(select._triggerButton)select._triggerButton.disabled=disabled;
+    const effort=$(".effort-select",select.closest("form"));if(effort){effort.disabled=disabled;if(effort._triggerButton)effort._triggerButton.disabled=disabled;}
     const form=select.closest("form");
     if(form) {
       const send=$('button[type="submit"]',form);
@@ -2534,6 +2566,7 @@ function openModelPopover(select,trigger){
   }
   openComposerPopover(pop,trigger,{width:320,temporary:true,focus:selected});
 }
+
 let modelBrowser;
 function openModelBrowser(select,trigger) {
   if(select.disabled)return;
@@ -2606,6 +2639,7 @@ function setLayout(count) {
 }
 function renderExtraPanes() {
   if(contextPopover?.pane)closeContextPopover();
+  closeComposerPopover(false);
   syncProgressStreams();
   const grid = $("#pane-grid");
   const spans = { 5: [2, 2, 2, 3, 3], 7: [3, 3, 3, 3, 4, 4, 4] }[state.layout];
@@ -2633,7 +2667,9 @@ function renderExtraPanes() {
     header.append(title);
     const desktopButton = document.createElement("button");
     desktopButton.type = "button";
-    desktopButton.textContent = "작업 공간";
+    desktopButton.className = "icon-button desktop-button";
+    desktopButton.setAttribute("aria-label","작업 공간 열기");desktopButton.title="작업 공간";
+    desktopButton.innerHTML='<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h18v13H3zM8 21h8m-4-4v4"/></svg>';
     desktopButton.disabled = !pane.roomId;
     desktopButton.addEventListener("click", () => desktopUI?.openRoom(pane.roomId));
     header.append(desktopButton);
@@ -2706,7 +2742,7 @@ function renderExtraPanes() {
 }
 function modelSelect(pane) {
   const label = document.createElement("label");
-  label.append(document.createTextNode("모델 "));
+  label.append(contextElement("span","모델","sr-only"));
   const select = document.createElement("select");
   select.className = "model-select"; select.tabIndex = -1;
   select.setAttribute("aria-label", "모델");
@@ -2729,6 +2765,7 @@ function effortSelect(pane) {
     select.append(option);
   }
   select.value = pane.effort || "";
+  select._pane=pane;
   select.addEventListener("change", () => { pane.effort = select.value; saveRoomPreferences(pane.roomId, {model:pane.model || "", effort:pane.effort}); });
   label.append(select);
   return label;
@@ -2866,8 +2903,6 @@ function bind() {
   setupSidebarResize();
   document.body.append($("#profile-menu"));
   $("#create-sidebar-group").addEventListener("click",()=>openSidebarGroupEditor());
-  $("#branch-fork").addEventListener("click",()=>void sessionAction("fork",null,$("#branch-fork"),null,null,currentBranchId()));
-  $("#branch-merge").addEventListener("click",()=>mergeBranch(currentBranchId()));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (composerPopover) { if (!nativePopover) closeComposerPopover(true); return; }
@@ -3266,7 +3301,7 @@ function setupDock() {
     else if(drop.kind==="merge"){
       if(branchBusy(roomId)||branchBusy(drop.targetId)){toast("진행 중인 작업이 끝난 뒤 합쳐 주세요.");return;}
       mergeBranch(drop.targetId,roomId);
-    }else placeDock(drop.index,drop.side);
+    }else{placeDock(drop.index,drop.side);closeSidebar();}
   }
   function stopPointer() {
     if(scrollFrame!==null)cancelAnimationFrame(scrollFrame);scrollFrame=null;
@@ -3290,6 +3325,7 @@ function setupDock() {
     if (event.button!==0 || pendingDock?.placing || event.target.closest("select,input,textarea")) return;
     const room=event.target.closest("[data-dock-room]"),handle=event.target.closest(".pane-bar[data-dock-index],.header-identity[data-dock-index]");
     if(!room&&(!handle||event.target.closest("button")))return;
+    if(event.pointerType==="touch"&&handle&&!room)return;
     pointerDock={id:event.pointerId,epoch:sidebarEpoch,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,source:room?{roomId:room.dataset.dockRoom}:{index:Number(handle.dataset.dockIndex)}};
     // A finger scrolls the list. Holding it still on a conversation lifts it for
     // dragging; letting go without moving opens the conversation menu instead.
@@ -3304,7 +3340,7 @@ function setupDock() {
   els.roomList.addEventListener("touchend",event=>{if(longPressDone&&event.cancelable)event.preventDefault();longPressDone=false;},{passive:false});
   document.addEventListener("pointermove", event => {
     if(!pointerDock||event.pointerId!==pointerDock.id)return;
-    if(event.buttons===0){stopPointer();return;}
+    if(event.pointerType!=="touch"&&event.buttons===0){stopPointer();return;}
     if(pointerDock.epoch!==sidebarEpoch){stopPointer();return;}
     if(pointerDock.touch&&!pointerDock.armed){if(Math.hypot(event.clientX-pointerDock.x,event.clientY-pointerDock.y)>8)stopPointer();return;}
     pointerDock.lastX=event.clientX;pointerDock.lastY=event.clientY;
@@ -3321,6 +3357,7 @@ function setupDock() {
   });
   document.addEventListener("click",event=>{if(suppressClick){event.preventDefault();event.stopImmediatePropagation();}},true);
   document.addEventListener("pointercancel",stopPointer);
+  els.roomList.addEventListener("scroll",()=>{if(pointerDock&&!pointerDock.active)stopPointer();},{passive:true});
   document.body.addEventListener("lostpointercapture",event=>{if(event.target===document.body&&pointerDock?.id===event.pointerId)stopPointer();});
   window.addEventListener("blur",stopPointer);
   document.addEventListener("dragstart",event=>{if(event.target.closest("[data-dock-room],.pane-bar[data-dock-index]"))event.preventDefault();});
