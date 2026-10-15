@@ -1,2 +1,151 @@
 /* Design tokens and shared element styles: type scale, spacing, radii, layers,
-   buttons, dialogs, form controls and focus. Loads after glass.css. */
+   buttons, dialogs, form controls and focus. Loads after glass.css and before
+   the area stylesheets, so an area file can refine anything defined here. */
+
+/* ------------------------------------------------------------------ tokens */
+:root {
+  /* Type. Sizes are rem so a larger browser font setting enlarges the text;
+     at the default setting they are 12/13/14/15/16/18/22px. Nothing in the
+     interface is set smaller than --fs-xs. */
+  --fs-xs: .75rem;
+  --fs-sm: .8125rem;
+  --fs-md: .875rem;
+  --fs-body: .9375rem;
+  --fs-lg: 1rem;
+  --fs-xl: 1.125rem;
+  --fs-2xl: 1.375rem;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", "Noto Sans Mono CJK KR", monospace;
+
+  /* Shape and rhythm. */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --tap: 44px;
+  --control-h: 40px;
+  --control-h-sm: 32px;
+  --icon-sm: 16px;
+  --icon-md: 20px;
+
+  /* Color. --text, --muted and --dim live in glass.css; secondary text keeps
+     4.5:1 on the canvas, the glass panels and the violet light behind them. */
+  --accent: #7956b5;
+  --accent-strong: #654296;
+  --accent-soft: rgba(185, 156, 219, .16);
+  --on-accent: #fff;
+  --danger: #b9425a;
+  --danger-strong: #a0354c;
+  --danger-text: #aa3b60;
+  --success: #3b7b68;
+  --warning: #986622;
+  --glass-accent: var(--accent);
+  --glass-accent-strong: var(--accent-strong);
+  --line-strong: rgba(79, 89, 120, .24);
+  --field-border: rgba(98, 88, 130, .42);
+  --field-border-hover: rgba(98, 88, 130, .62);
+  --focus-ring: var(--accent);
+  --focus-halo: rgba(121, 86, 181, .20);
+  --button-bg: rgba(255, 255, 255, .62);
+  --button-bg-hover: rgba(255, 255, 255, .92);
+  --icon-hover-bg: rgba(121, 86, 181, .10);
+  --code-bg: #f5f1fb;
+  --icon-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='m6 6 12 12M6 18 18 6'/%3E%3C/svg%3E");
+  --icon-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235a6073' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Layers. Dialogs and popovers use the browser top layer instead. */
+  --z-raised: 5;
+  --z-sticky: 10;
+  --z-workspace: 30;
+  --z-dropdown: 40;
+  --z-drawer: 50;
+  --z-toast: 70;
+
+  font-family: var(--font-sans);
+  /* Korean wraps between words. A word wider than its line still breaks at
+     the edge, and running text may break anywhere so it never widens a box. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  accent-color: var(--accent);
+}
+:is(p, li, dd, dt, td, th, blockquote, figcaption, summary, label) { overflow-wrap: anywhere; }
+
+/* ----------------------------------------------------------- base elements */
+code, kbd, pre, samp, .token-box code, .setup-command { font-family: var(--font-mono); }
+/* Long code lines scroll sideways; a soft edge shows there is more. */
+.code-block { background: var(--code-bg); }
+.code-block pre {
+  background:
+    linear-gradient(90deg, var(--code-bg) 30%, rgba(245, 241, 251, 0)) 0 0 / 32px 100% no-repeat local,
+    linear-gradient(270deg, var(--code-bg) 30%, rgba(245, 241, 251, 0)) 100% 0 / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(78, 58, 118, .18), transparent) 0 0 / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(78, 58, 118, .18), transparent) 100% 0 / 12px 100% no-repeat scroll,
+    var(--code-bg);
+}
+
+/* Only three weights exist in the system. */
+.notification-head h2, .notification-item-title, .voice-call-controls .voice-start,
+.notification-badge, .model-browser h2, .model-card strong { font-weight: var(--fw-semibold); }
+
+/* ------------------------------------------------------------- type scale */
+/* Small print is 12px at least. Avatar initials are pictures, not text, and
+   keep their own size. */
+.notification-badge, .notification-push-status, .notification-actions, .notification-mark-read,
+.notification-item-meta, .notification-item-meta time,
+.routine-enabled, .routine-meta, .setup-command,
+.text-button, .search-field kbd, .sidebar-heading, .room-item-copy small, .profile-copy span,
+.demo-badge, .topbar .demo-badge, .model-status, .members-button,
+.message-meta strong, .message-meta time,
+.message-queue-count, .message-queue-detail, .message-queue-steering, .message-queue-actions button,
+.record-cancel-button, .attachment-card, .composer-caption, .bot-option small, .sending-status,
+.member-copy small, .hint, .expires-label, .model-controls label, .split-picker button,
+.picker-eyebrow, .model-card span, .model-card small, .code-header, .code-header button,
+.agent-workspaces button, .context-controls, .model-controls > .context-controls,
+.context-controls .context-label, .context-muted, .context-note, .context-breakdown,
+.context-usage-counts span, .context-quota-row, .context-provider-select, .context-scope-note,
+.sidebar-heading button, .room-section-label, .room-group-toggle, .room-group-toggle > small,
+.room-group-empty, .sidebar-dialog-note, .topbar .header-identity h1, .main-panel.is-split .topbar h1,
+.profile-menu-heading, .context-scale { font-size: var(--fs-xs); }
+.notification-badge { min-width: 18px; height: 18px; }
+.picker-eyebrow { letter-spacing: .6px; }
+.message-meta, .composer-caption, .code-header { line-height: 1.5; }
+
+/* Dialog titles share one size; display headings use the largest step. */
+.modal-head h2, .sidebar-dialog h2, .room-sharing-header h2, .archived-dialog h2,
+.routines-header h2, .setup-header h2, .model-browser h2, .model-change-dialog h2 {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  line-height: 1.4;
+  letter-spacing: -.2px;
+}
+.context-popover h2, .notification-head h2 { font-size: var(--fs-lg); font-weight: var(--fw-semibold); }
+.auth-panel h1, .empty-state h2, .startup-view strong, .voice-call-dialog h2 { font-size: var(--fs-2xl); }
+.empty-state h2, .voice-call-dialog h2 { font-weight: var(--fw-semibold); }
+
+/* ----------------------------------------------------------------- icons */
+/* Two icon sizes: 20px on their own, 16px next to words. */
+.icon { width: var(--icon-md); height: var(--icon-md); }
+.header-avatar .icon, .message .avatar .icon, .agent-workspaces .icon, .room-icon .icon,
+.search-field .icon {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+.message-actions .icon, .topbar .desktop-button .icon, .avatar-bot .icon, .bot-option > .icon,
+.model-controls > .topbar-actions .icon, .model-controls > .topbar-actions .notification-bell svg,
+.notification-bell svg, .modal-close .icon {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+.bot-option > .icon { margin-right: var(--space-1); }
+

@@ -2,8 +2,8 @@
    sidebar / transcript geometry. See ../DESIGN-REFERENCE.md. */
 :root {
   color-scheme: dark;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 13px;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif);
+  font-size: 100%;
   font-synthesis: none;
   --bg: #070707;
   --sidebar: #111111;
@@ -33,6 +33,7 @@ body,
 }
 body {
   overflow: hidden;
+  font-size: var(--fs-sm, 13px);
 }
 button,
 input,
@@ -1290,12 +1291,8 @@ button:active:not(:disabled) { filter:brightness(.9); }
 .avatar-bot .icon {width:20px;height:20px}
 .bot-option > .icon {width:22px;height:22px;margin-right:8px}
 .agent-working .avatar-bot .icon { animation: icon-write 1.4s ease-in-out infinite; }
-.icon-button:hover .icon,
-.room-item:hover .room-icon .icon,
-.send-button:hover .icon { animation: icon-pop .45s cubic-bezier(.22,1,.36,1); }
-.send-button:hover .icon { animation: icon-send .7s ease-in-out infinite; }
+@media (hover:hover) and (pointer:fine) { .send-button:hover:not(:disabled) .icon { animation: icon-send .7s ease-in-out 1; } }
 .record-button.is-recording .icon { animation: icon-write .8s ease-in-out infinite; }
-@keyframes icon-pop { 40% { transform: scale(1.18) rotate(-8deg); } }
 @keyframes icon-send { 50% { transform: translateY(-2px); } }
 @keyframes icon-write { 0%,100% { transform: rotate(0); } 35% { transform: rotate(-10deg) translateY(-1px); } 70% { transform: rotate(8deg); } }
 .sending-status.is-visible { display: flex; align-items: center; gap: 8px; height: auto; min-height: 28px; }
@@ -1323,7 +1320,7 @@ button:active:not(:disabled) { filter:brightness(.9); }
 .avatar-bot { background:transparent; overflow:visible; }
 .avatar-bot .agent-art { width:34px; height:34px; }
 .header-avatar { background: color-mix(in srgb, var(--brand-indigo) 7%, transparent); }
-button:hover .agent-art { transform:translateY(-2px) rotate(-5deg) scale(1.08); filter:drop-shadow(0 3px 8px #f4075830); }
+@media (hover:hover) and (pointer:fine) { button:hover .agent-art { transform:translateY(-2px); filter:drop-shadow(0 3px 8px #f4075830); } }
 button:active .agent-art { transform:scale(.94); }
 @media(prefers-reduced-motion:reduce) {
   .agent-art { animation:none!important; transition:none!important; transform:none!important; }
