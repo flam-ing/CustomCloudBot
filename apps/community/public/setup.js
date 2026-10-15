@@ -6,12 +6,22 @@ const CLOUDS = [
 ];
 const BACKENDS = { auto: "자동 연결 · API 우선", gateway: "OpenClaw Gateway", api: "API 직접 연결", demo: "데모", none: "아직 연결하지 않음" };
 
-export function applyBrand(brand = {}) {
-  const name = typeof brand.name === "string" && brand.name.trim() ? brand.name.trim().slice(0, 80) : DEFAULT_NAME;
-  document.querySelectorAll("[data-product-name]").forEach(element => { element.textContent = name; });
+const BRAND_CACHE = "community-brand-name";
+function showBrandName(name) {
+  document.querySelectorAll("[data-product-name]").forEach(element => { element.textContent = name; element.title = name; });
   document.title = document.body.dataset.pageTitle ? `${document.body.dataset.pageTitle} · ${name}` : name;
   document.querySelector("#startup-view")?.setAttribute("aria-label", `${name} 불러오는 중`);
 }
+export function applyBrand(brand = {}) {
+  const name = typeof brand.name === "string" && brand.name.trim() ? brand.name.trim().slice(0, 80) : DEFAULT_NAME;
+  showBrandName(name);
+  try { localStorage.setItem(BRAND_CACHE, name); } catch {}
+}
+// Show the name from the last visit right away so the default name does not flash first.
+if (typeof document !== "undefined") try {
+  const cached = localStorage.getItem(BRAND_CACHE);
+  if (cached && cached !== DEFAULT_NAME) showBrandName(cached.slice(0, 80));
+} catch {}
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
