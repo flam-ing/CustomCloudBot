@@ -11,7 +11,7 @@ function setup({ supported = false, api, requestPermission, url = 'https://bots.
   const nodes = new Map();
   for (const id of ['install-button', 'auth-install-button', 'push-button', 'test-push-button', 'push-status', 'pwa-dialog', 'pwa-dialog-title', 'pwa-dialog-message']) {
     const classes = new Set(['is-hidden']);
-    nodes.set(id, { textContent: '', handlers: {}, classList: { remove(k) { classes.delete(k); }, toggle(k, on) { on ? classes.add(k) : classes.delete(k); }, contains(k) { return classes.has(k); } }, addEventListener(k, fn) { this.handlers[k] = fn; }, removeEventListener(k) { delete this.handlers[k]; }, showModal() { this.open = true; }, close() { this.open = false; } });
+    nodes.set(id, { textContent: '', handlers: {}, attrs: {}, setAttribute(k,v) { this.attrs[k]=v; }, classList: { remove(k) { classes.delete(k); }, toggle(k, on) { on ? classes.add(k) : classes.delete(k); }, contains(k) { return classes.has(k); } }, addEventListener(k, fn) { this.handlers[k] = fn; }, removeEventListener(k) { delete this.handlers[k]; }, showModal() { this.open = true; }, close() { this.open = false; } });
   }
   let session = null;
   const calls = [];

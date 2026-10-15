@@ -3019,6 +3019,7 @@ function bind() {
   });
   window.addEventListener("resize",closeProfileMenu);
   $("#edit-profile-button").addEventListener("click",()=>profileUI?.open());
+  $("#notification-settings-button").addEventListener("click",()=>{closeSidebar();notificationUI?.openSettings();});
   $("#restore-conversations").addEventListener("click",openArchivedConversations);
   $("#open-routines").addEventListener("click",openRoutines);
   $("#open-bot-setup").addEventListener("click",()=>void setupUI?.open());
@@ -3121,7 +3122,10 @@ bind();
 trackKeyboardViewport();
 for (const pop of [$("#bot-picker"), $("#composer-more-menu")]) prepareComposerPopover(pop);
 agentPresence = createAgentPresence({ mount: $("#agent-presence") });
-notificationUI = createNotificationCenter({ mount: $("#notification-center"), openRoom: async id => { await loadRooms(); await selectRoom(id); }, toast });
+notificationUI = createNotificationCenter({ mount: $("#notification-center"), api,
+  getViewingRoomIds: () => !document.hidden && document.hasFocus() && !els.workspace.classList.contains("is-hidden")
+    ? [state.selectedRoom, ...state.extra.map(pane => pane.roomId)].filter(Boolean) : [],
+  openRoom: async id => { await loadRooms(); await selectRoom(id); }, toast });
 pwaUI = createPwaController({ api, getSession: () => state.session, toast });
 desktopUI = createDesktopUI({ api, getRoomId: () => state.selectedRoom, getRoomName: id => state.rooms.find(room=>room.id===id)?.name || "대화", toast });
 profileUI = createProfileSettings({api,getSession:()=>state.session,toast,onSaved: user=>{

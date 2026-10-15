@@ -10,7 +10,11 @@ export function createNotificationStore() {
   const rooms = new Map();
   const matches = (options) => Boolean(userId && options?.userId === userId);
   const add = (item) => {
-    if (items.some((entry) => entry.id === item.id)) return false;
+    const existing = items.find((entry) => entry.id === item.id);
+    if (existing) {
+      if (existing.generic) { Object.assign(existing, item, { generic: false }); return true; }
+      return false;
+    }
     items = [{ ...item, read: false }, ...items].slice(0, 50);
     return true;
   };
@@ -38,6 +42,16 @@ export function createNotificationStore() {
     reset() { userId = null; items = []; rooms.clear(); },
     snapshot() { return { userId, items: items.map((item) => ({ ...item })), unread: items.filter((item) => !item.read).length }; },
     markAllRead() { items.forEach((item) => { item.read = true; }); },
+    ingestFeed(entries, options) {
+      if (!matches(options)) return;
+      for (const item of entries) {
+        const existing = items.find((entry) => entry.id === item.id);
+        if (existing) { existing.read = existing.read || item.read; existing.roomName = item.roomName; }
+        else items.push({ ...item, generic: true, text: "대화에서 확인해주세요." });
+      }
+      items.sort((a, b) => b.at - a.at);
+      items = items.slice(0, 50);
+    },
     markRoomRead(id) { items.forEach((item) => { if (item.roomId === id) item.read = true; }); },
     forgetRoom(id) { rooms.delete(id); items = items.filter((item) => item.roomId !== id); },
     observeProgress: progress,
@@ -71,14 +85,131 @@ export function createNotificationStore() {
   };
 }
 
-export function createNotificationCenter({ mount, openRoom, toast = () => {} }) {
+const sanitizeFeedEntries = (data) => (Array.isArray(data?.items) ? data.items : []).filter((item) =>
+  typeof item?.id === "string" && item.id.length <= 220 && roomPattern.test(item.roomId || "") &&
+  Number.isSafeInteger(item.sequence) && item.sequence > 0 && Number.isFinite(item.at)
+).map((item) => ({ id: item.id, sequence: item.sequence, roomId: item.roomId, roomName: clean(item.roomName, 80) || "대화", kind: clean(item.kind, 20), title: clean(item.title) || "새 알림이 도착했어요", at: item.at, read: item.read === true }));
+
+// This cursor is separate from detailed room previews: only the server feed can
+// produce sound, and reconnecting or switching accounts never replays history.
+export function createNotificationFeedState() {
+  let initialized = false;
+  let cursor = 0;
+  const seen = new Set();
+  return {
+    get cursor() { return initialized ? cursor : null; },
+    reset() { initialized = false; cursor = 0; seen.clear(); },
+    consume(data, { soundEnabled = false, viewingRoomIds = [] } = {}) {
+      const viewing = new Set(viewingRoomIds);
+      const entries = sanitizeFeedEntries(data);
+      const sound = entries.filter((item) => initialized && item.sequence > cursor && !seen.has(item.id) && !item.read && soundEnabled && !viewing.has(item.roomId));
+      for (const item of entries) seen.add(item.id);
+      while (seen.size > 500) seen.delete(seen.values().next().value);
+      cursor = Math.max(cursor, Number.isSafeInteger(data?.cursor) ? data.cursor : 0, ...entries.map((item) => item.sequence));
+      initialized = true;
+      return { entries, sound, readIds: entries.filter((item) => !item.read && viewing.has(item.roomId)).map((item) => item.id) };
+    },
+  };
+}
+
+export function normalizeNotificationSettings(value) {
+  return { soundEnabled: value?.soundEnabled !== false, emailEnabled: value?.emailEnabled === true, emailAddress: clean(value?.emailAddress, 254), emailConfigured: value?.emailConfigured === true };
+}
+
+export function createNotificationSound(win, onChange = () => {}) {
+  let context = null;
+  let disposed = false;
+  const supported = Boolean(win?.AudioContext || win?.webkitAudioContext);
+  return {
+    get supported() { return supported; },
+    get ready() { return !disposed && context?.state === "running"; },
+    async unlock() {
+      if (!supported || disposed) return false;
+      try {
+        if (!context || context.state === "closed") {
+          context = new (win.AudioContext || win.webkitAudioContext)();
+          context.onstatechange = onChange;
+        }
+        await context.resume();
+        if (disposed || context.state !== "running") return false;
+        // A silent buffer played inside the user gesture unlocks audio on iOS.
+        const source = context.createBufferSource();
+        source.buffer = context.createBuffer(1, 1, context.sampleRate);
+        source.connect(context.destination);
+        source.start();
+        onChange();
+        return true;
+      } catch { onChange(); return false; }
+    },
+    play() {
+      if (disposed || context?.state !== "running") return false;
+      try {
+        const now = context.currentTime;
+        [660, 880].forEach((frequency, index) => {
+          const tone = context.createOscillator();
+          const gain = context.createGain();
+          const start = now + index * .13;
+          tone.type = "sine";
+          tone.frequency.value = frequency;
+          gain.gain.setValueAtTime(0, start);
+          gain.gain.linearRampToValueAtTime(.055, start + .018);
+          gain.gain.exponentialRampToValueAtTime(.0001, start + .29);
+          tone.connect(gain); gain.connect(context.destination);
+          tone.onended = () => { tone.disconnect(); gain.disconnect(); };
+          tone.start(start); tone.stop(start + .3);
+        });
+        return true;
+      } catch { return false; }
+    },
+    reset() { const previous = context; context = null; if (previous) { previous.onstatechange = null; previous.close().catch(() => {}); } onChange(); },
+    destroy() { disposed = true; this.reset(); },
+  };
+}
+
+// Store only event IDs and a timestamp, never room names or message previews.
+export async function claimNotificationSound({ win, userId, ids, play, now = Date.now() }) {
+  if (!ids.length || !userId) return false;
+  const key = `ccb:notification-sound:${userId}`;
+  const claim = () => {
+    let previous = { at: 0, ids: [] };
+    try { previous = JSON.parse(win.localStorage.getItem(key)) || previous; } catch {}
+    const recent = now - previous.at < 5 * 60_000 && Array.isArray(previous.ids) ? previous.ids : [];
+    if (ids.every((id) => recent.includes(id))) return false;
+    if (!play()) return false;
+    try { win.localStorage.setItem(key, JSON.stringify({ at: now, ids: [...new Set([...recent, ...ids])].slice(-200) })); } catch {}
+    return true;
+  };
+  if (win?.navigator?.locks?.request) {
+    try { return await win.navigator.locks.request(key, { ifAvailable: true }, (lock) => lock ? claim() : false); } catch { return false; }
+  }
+  return claim();
+}
+
+export function createNotificationCenter({ mount, openRoom, api, getViewingRoomIds = () => [], toast = () => {} }) {
   const store = createNotificationStore();
-  if (!mount) return { ...store, destroy() { store.reset(); } };
+  if (!mount) return { ...store, openSettings() {}, destroy() { store.reset(); } };
   const doc = mount.ownerDocument;
   const win = doc.defaultView;
+  const feed = createNotificationFeedState();
   let generation = 0;
   let opened = false;
+  let view = "feed";
   let lastUnread = 0;
+  let preferences = normalizeNotificationSettings();
+  let preferencesLoaded = false;
+  let preferencesBusy = false;
+  let preferencesError = "";
+  let settingsRequest = 0;
+  let pollBusy = false;
+  let destroyed = false;
+  let timer = null;
+  let lastSoundAt = 0;
+  let lastRefreshAt = 0;
+  let snapshotBusy = false;
+  const pendingReads = new Set();
+  const pendingRoomReads = new Set();
+  let pendingReadAll = 0;
+  let readBusy = false;
   const element = (tag, className, text) => {
     const node = doc.createElement(tag);
     if (className) node.className = className;
@@ -112,17 +243,44 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
   const header = element("div", "notification-head");
   const title = element("h2", "", "알림");
   title.id = "notification-title";
+  const headerActions = element("div", "notification-head-actions");
+  const settingsButton = button("notification-settings-link", "설정");
   const closeButton = button("notification-close", "×");
   closeButton.setAttribute("aria-label", "알림 닫기");
-  header.append(title, closeButton);
-  const settings = element("div", "notification-settings");
+  headerActions.append(settingsButton, closeButton);
+  header.append(title, headerActions);
+  const settings = element("div", "notification-preferences");
+  const soundRow = element("div", "notification-preference-row");
+  const soundCopy = element("div", "notification-preference-copy");
+  soundCopy.append(element("strong", "", "앱 알림 소리"), element("p", "", "보고 있지 않은 대화에 새 알림이 오면 소리를 내요."));
+  const soundToggle = button("notification-switch");
+  soundToggle.setAttribute("role", "switch");
+  soundToggle.setAttribute("aria-label", "앱 알림 소리");
+  soundRow.append(soundCopy, soundToggle);
+  const soundStatus = element("p", "notification-preference-hint");
+  const soundPreview = button("notification-setting-button", "소리 들어보기");
+  const emailRow = element("div", "notification-preference-row");
+  const emailCopy = element("div", "notification-preference-copy");
+  emailCopy.append(element("strong", "", "이메일 알림"));
+  const emailDescription = element("p");
+  emailCopy.append(emailDescription);
+  const emailToggle = button("notification-switch");
+  emailToggle.setAttribute("role", "switch");
+  emailToggle.setAttribute("aria-label", "이메일 알림");
+  emailRow.append(emailCopy, emailToggle);
+  const emailHint = element("p", "notification-preference-hint");
+  const browserSettings = element("div", "notification-browser-settings");
+  browserSettings.append(element("strong", "notification-section-title", "기기·브라우저 알림"));
+  const pushActions = element("div", "notification-push-actions");
   const push = button("notification-setting-button", "알림 켜기");
   push.id = "push-button";
   const test = button("notification-setting-button is-hidden", "알림 테스트");
   test.id = "test-push-button";
   const status = element("p", "notification-push-status");
   status.id = "push-status";
-  settings.append(push, test, status);
+  pushActions.append(push, test);
+  browserSettings.append(pushActions, status);
+  settings.append(soundRow, soundStatus, soundPreview, emailRow, emailHint, browserSettings, element("p", "notification-preference-hint", "소리는 앱이 열려 있을 때 재생돼요. 앱을 닫아도 받으려면 기기·브라우저 알림이나 이메일 알림을 켜주세요."));
   const actions = element("div", "notification-actions");
   const markAll = button("notification-mark-read", "모두 읽음");
   actions.append(element("span", "", "새 답변과 대화 활동"), markAll);
@@ -133,8 +291,10 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
   live.setAttribute("aria-live", "polite");
   panel.append(header, settings, actions, list);
   mount.replaceChildren(bell, panel, live);
+  const sound = createNotificationSound(win, () => renderSettings());
+  const current = (epoch) => !destroyed && epoch === generation && Boolean(store.snapshot().userId);
+  const viewedRooms = () => doc.hidden || (typeof doc.hasFocus === "function" && !doc.hasFocus()) ? [] : getViewingRoomIds();
   // A top-layer popup escapes the composer's and split pane's glass/overflow.
-  // Older browsers use a body portal with the same fixed viewport positioning.
   const topLayer = typeof panel.showPopover === "function";
   if (topLayer) panel.setAttribute("popover", "manual");
   else if (doc.body) doc.body.append(panel);
@@ -164,6 +324,21 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
     bell.setAttribute("aria-expanded", "false");
     if (restoreFocus) bell.focus();
   };
+  const renderSettings = () => {
+    settings.hidden = view !== "settings";
+    actions.hidden = view === "settings";
+    list.hidden = view === "settings";
+    title.textContent = view === "settings" ? "알림 설정" : "알림";
+    settingsButton.textContent = view === "settings" ? "알림 목록" : "설정";
+    soundToggle.setAttribute("aria-checked", String(preferences.soundEnabled));
+    emailToggle.setAttribute("aria-checked", String(preferences.emailEnabled));
+    soundToggle.disabled = preferencesBusy || !preferencesLoaded;
+    emailToggle.disabled = preferencesBusy || !preferencesLoaded || (!preferences.emailConfigured && !preferences.emailEnabled);
+    soundPreview.disabled = !sound.supported;
+    soundStatus.textContent = preferencesError || (!sound.supported ? "이 브라우저에서는 앱 알림 소리를 지원하지 않아요." : !preferences.soundEnabled ? "소리가 꺼져 있어요." : sound.ready ? "소리가 준비됐어요." : "소리 들어보기를 누르면 이 기기에서 소리를 사용할 수 있어요.");
+    emailDescription.textContent = preferences.emailAddress || "알림을 받을 이메일이 아직 연결되지 않았어요.";
+    emailHint.textContent = preferences.emailConfigured ? "약 1분 동안 읽지 않은 알림을 보내요. 대화 내용은 포함하지 않아요." : preferences.emailAddress ? "메일 발송 설정이 준비되면 켤 수 있어요." : "관리자가 연결한 본인 이메일이 있어야 켤 수 있어요.";
+  };
   const render = () => {
     const snapshot = store.snapshot();
     mount.hidden = !snapshot.userId;
@@ -175,13 +350,14 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
     markAll.disabled = !snapshot.unread;
     if (snapshot.unread !== lastUnread) live.textContent = snapshot.unread ? `읽지 않은 알림 ${snapshot.unread}개` : "";
     lastUnread = snapshot.unread;
+    renderSettings();
     if (!opened) return;
     const focusedId = doc.activeElement?.dataset?.notificationId;
     const scroll = list.scrollTop;
     list.replaceChildren();
     if (!snapshot.items.length) {
       const empty = element("li", "notification-empty");
-      empty.append(element("strong", "", "새 알림이 없어요"), element("span", "", "열어둔 대화의 새 답변과 활동이 여기에 표시돼요."));
+      empty.append(element("strong", "", "새 알림이 없어요"), element("span", "", "다른 대화의 새 답변과 활동도 여기에 표시돼요."));
       list.append(empty);
     }
     for (const item of snapshot.items) {
@@ -194,18 +370,19 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
       meta.append(element("strong", "", item.roomName), time);
       entry.append(meta, element("span", "notification-item-title", item.title), element("span", "notification-item-text", item.text));
       entry.addEventListener("click", async () => {
-        const current = generation;
+        const epoch = generation;
         entry.disabled = true;
         try {
           await openRoom(item.roomId);
-          if (current !== generation) return;
+          if (!current(epoch)) return;
           store.markRoomRead(item.roomId);
+          void saveRead({ roomId: item.roomId }, epoch);
           close();
         } catch (error) {
-          if (current !== generation) return;
+          if (!current(epoch)) return;
           if (error?.status === 403 || error?.status === 404) store.forgetRoom(item.roomId);
           toast("대화를 열지 못했어요. 대화 목록에서 다시 확인해주세요.");
-        } finally { if (current === generation) render(); }
+        } finally { if (current(epoch)) render(); }
       });
       row.append(entry);
       list.append(row);
@@ -215,31 +392,188 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
     if (topLayer && !panel.matches(":popover-open")) panel.showPopover();
     position();
   };
-  bell.addEventListener("click", () => { if (opened) close(); else { opened = true; render(); closeButton.focus(); } });
+  const flushReads = async (epoch) => {
+    if (!api || !current(epoch) || readBusy) return;
+    readBusy = true;
+    try {
+      while (current(epoch) && (pendingReadAll || pendingRoomReads.size || pendingReads.size)) {
+        const allVersion = pendingReadAll;
+        const rooms = [...pendingRoomReads];
+        const ids = [...pendingReads].slice(0, 200);
+        const payload = allVersion ? { all: true } : rooms.length ? { roomId: rooms[0] } : { ids };
+        await api("/api/notifications/read", { method: "POST", body: JSON.stringify(payload) });
+        if (!current(epoch)) return;
+        if (allVersion) {
+          if (pendingReadAll === allVersion) pendingReadAll = 0;
+          rooms.forEach((room) => pendingRoomReads.delete(room));
+          ids.forEach((id) => pendingReads.delete(id));
+        } else if (rooms.length) pendingRoomReads.delete(rooms[0]);
+        else ids.forEach((id) => pendingReads.delete(id));
+      }
+    } catch { /* Keep acknowledgements queued for the next feed/focus poll. */ }
+    finally { if (current(epoch)) readBusy = false; }
+  };
+  const saveRead = async (payload, epoch = generation) => {
+    if (!api || !current(epoch)) return;
+    if (payload.all) pendingReadAll++;
+    if (payload.roomId) pendingRoomReads.add(payload.roomId);
+    for (const id of payload.ids || []) pendingReads.add(id);
+    await flushReads(epoch);
+  };
+  const readViewingRooms = async (epoch) => {
+    const rooms = new Set(viewedRooms());
+    const ids = store.snapshot().items.filter((item) => !item.read && rooms.has(item.roomId)).map((item) => item.id);
+    for (const id of ids) pendingReads.add(id);
+    for (const roomId of rooms) store.markRoomRead(roomId);
+    await flushReads(epoch);
+  };
+  const loadSettings = async (epoch) => {
+    if (!api || !current(epoch) || preferencesBusy) return;
+    const request = ++settingsRequest;
+    try {
+      const value = await api("/api/notifications/settings");
+      if (!current(epoch) || preferencesBusy || request !== settingsRequest) return;
+      preferences = normalizeNotificationSettings(value);
+      preferencesLoaded = true;
+      preferencesError = "";
+      renderSettings();
+    } catch { if (current(epoch) && request === settingsRequest) { preferencesError = "설정을 불러오지 못했어요. 잠시 후 다시 열어주세요."; renderSettings(); } }
+  };
+  const saveSettings = async (patch) => {
+    const epoch = generation;
+    if (!api || !current(epoch) || preferencesBusy || !preferencesLoaded) return;
+    preferencesBusy = true;
+    settingsRequest++;
+    renderSettings();
+    try {
+      const value = await api("/api/notifications/settings", { method: "POST", body: JSON.stringify(patch) });
+      if (!current(epoch)) return;
+      preferences = normalizeNotificationSettings(value);
+      try { win?.localStorage.setItem(`ccb:notification-settings:${store.snapshot().userId}`, String(Date.now())); } catch {}
+    } catch (error) {
+      if (current(epoch)) toast(error?.status === 409 ? "알림을 받을 이메일 연결을 먼저 확인해주세요." : "알림 설정을 저장하지 못했어요.");
+    } finally { if (current(epoch)) { preferencesBusy = false; renderSettings(); } }
+  };
+  const poll = async () => {
+    const epoch = generation;
+    if (!api || !current(epoch) || pollBusy) return;
+    pollBusy = true;
+    try {
+      const data = await api(`/api/notifications${feed.cursor === null ? "" : `?after=${feed.cursor}`}`);
+      if (!current(epoch)) return;
+      const result = feed.consume(data, { soundEnabled: preferencesLoaded && preferences.soundEnabled, viewingRoomIds: viewedRooms() });
+      store.ingestFeed(result.entries, { userId: store.snapshot().userId });
+      result.readIds.forEach((id) => pendingReads.add(id));
+      void readViewingRooms(epoch);
+      if (result.sound.length && sound.ready && Date.now() - lastSoundAt > 1500) {
+        await claimNotificationSound({ win, userId: store.snapshot().userId, ids: result.sound.map((item) => item.id), play: () => {
+          if (!current(epoch) || !preferences.soundEnabled || !result.sound.some((item) => !viewedRooms().includes(item.roomId))) return false;
+          const played = sound.play();
+          if (played) lastSoundAt = Date.now();
+          return played;
+        } });
+      }
+      if (current(epoch)) render();
+    } catch { /* Keep the existing feed and retry, without re-baselining. */ }
+    finally { if (current(epoch)) pollBusy = false; }
+  };
+  const refreshSnapshot = async () => {
+    const epoch = generation;
+    if (!api || !current(epoch) || snapshotBusy || feed.cursor === null) return;
+    snapshotBusy = true;
+    try {
+      const data = await api("/api/notifications");
+      if (!current(epoch)) return;
+      // Reconcile another tab's read markers, but do not consume the sound cursor.
+      store.ingestFeed(sanitizeFeedEntries(data), { userId: store.snapshot().userId });
+      void readViewingRooms(epoch);
+      render();
+    } catch {}
+    finally { if (current(epoch)) snapshotBusy = false; }
+  };
+  const refreshPreferencesAndReads = (force = false) => {
+    if (!force && Date.now() - lastRefreshAt < 30_000) return;
+    lastRefreshAt = Date.now();
+    void loadSettings(generation);
+    void refreshSnapshot();
+  };
+  const openSettings = () => {
+    if (!store.snapshot().userId) return;
+    opened = true; view = "settings"; render();
+    void loadSettings(generation);
+    settingsButton.focus();
+  };
+  const onGesture = (event) => {
+    if (event.isTrusted === false || !store.snapshot().userId || !preferences.soundEnabled || sound.ready) return;
+    void sound.unlock();
+  };
+  const onStorage = (event) => {
+    const userId = store.snapshot().userId;
+    if (userId && event.key === `ccb:notification-settings:${userId}`) void loadSettings(generation);
+  };
+  const onVisible = () => {
+    if (!store.snapshot().userId) return;
+    void readViewingRooms(generation);
+    if (!doc.hidden) { void poll(); refreshPreferencesAndReads(true); }
+  };
+  bell.addEventListener("click", () => { if (opened) close(); else { opened = true; view = "feed"; render(); closeButton.focus(); void poll(); refreshPreferencesAndReads(true); } });
+  settingsButton.addEventListener("click", () => { view = view === "settings" ? "feed" : "settings"; render(); if (view === "settings") void loadSettings(generation); });
   closeButton.addEventListener("click", () => close(true));
-  markAll.addEventListener("click", () => { store.markAllRead(); render(); });
+  markAll.addEventListener("click", () => { store.markAllRead(); void saveRead({ all: true }); render(); });
+  soundToggle.addEventListener("click", () => { if (!preferences.soundEnabled) void sound.unlock(); void saveSettings({ soundEnabled: !preferences.soundEnabled }); });
+  emailToggle.addEventListener("click", () => { void saveSettings({ emailEnabled: !preferences.emailEnabled }); });
+  soundPreview.addEventListener("click", async () => { const epoch = generation; if (await sound.unlock() && current(epoch)) sound.play(); });
   const onOutside = (event) => { if (opened && !mount.contains(event.target) && !panel.contains(event.target)) close(); };
   const onKey = (event) => { if (opened && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); } };
   doc.addEventListener("pointerdown", onOutside);
+  doc.addEventListener("pointerdown", onGesture, true);
   doc.addEventListener("focusin", onOutside);
   doc.addEventListener("keydown", onKey);
+  doc.addEventListener("keydown", onGesture, true);
+  doc.addEventListener("visibilitychange", onVisible);
   doc.addEventListener("scroll", position, true);
+  win?.addEventListener("storage", onStorage);
+  win?.addEventListener("focus", onVisible);
   win?.addEventListener("resize", position);
   win?.visualViewport?.addEventListener("resize", position);
   win?.visualViewport?.addEventListener("scroll", position);
   const resizeObserver = win?.ResizeObserver ? new win.ResizeObserver(position) : null;
   resizeObserver?.observe(panel);
+  const clearSession = () => {
+    generation++;
+    if (timer !== null) win?.clearInterval(timer);
+    timer = null; pollBusy = false; snapshotBusy = false; preferencesBusy = false; preferencesLoaded = false; lastRefreshAt = 0;
+    preferences = normalizeNotificationSettings();
+    settingsRequest++; preferencesError = "";
+    feed.reset(); pendingReads.clear(); pendingRoomReads.clear(); pendingReadAll = 0; readBusy = false; lastSoundAt = 0;
+    close(); list.replaceChildren(); live.textContent = ""; sound.reset();
+  };
   render();
   return {
-    setSession(session) { const before = store.snapshot().userId; store.setSession(session); if (before !== store.snapshot().userId) { generation++; close(); list.replaceChildren(); live.textContent = ""; } render(); },
-    observeRoom(data, options) { if (store.observeRoom(data, options)) render(); },
-    observeProgress(id, event, options) { if (store.observeProgress(id, event, options)) render(); },
-    markRoomRead(id) { store.markRoomRead(id); render(); },
-    reset() { generation++; store.reset(); close(); list.replaceChildren(); live.textContent = ""; render(); },
+    setSession(session) {
+      const before = store.snapshot().userId;
+      store.setSession(session);
+      if (before !== store.snapshot().userId) {
+        clearSession();
+        if (store.snapshot().userId && api) {
+          lastRefreshAt = Date.now();
+          void loadSettings(generation); void poll();
+          timer = win?.setInterval(() => { void poll(); refreshPreferencesAndReads(); }, 3000) ?? null;
+        }
+      }
+      render();
+    },
+    openSettings,
+    observeRoom(data, options) { if (store.observeRoom(data, options)) { void readViewingRooms(generation); render(); } },
+    observeProgress(id, event, options) { if (store.observeProgress(id, event, options)) { void readViewingRooms(generation); render(); } },
+    markRoomRead(id) { if (!viewedRooms().includes(id)) return; store.markRoomRead(id); void saveRead({ roomId: id }); render(); },
+    reset() { clearSession(); store.reset(); render(); },
     destroy() {
-      generation++; store.reset(); close();
-      doc.removeEventListener("pointerdown", onOutside); doc.removeEventListener("focusin", onOutside); doc.removeEventListener("keydown", onKey); doc.removeEventListener("scroll", position, true);
-      win?.removeEventListener("resize", position);
+      clearSession(); destroyed = true; store.reset(); sound.destroy();
+      doc.removeEventListener("pointerdown", onOutside); doc.removeEventListener("pointerdown", onGesture, true);
+      doc.removeEventListener("focusin", onOutside); doc.removeEventListener("keydown", onKey); doc.removeEventListener("keydown", onGesture, true);
+      doc.removeEventListener("visibilitychange", onVisible); doc.removeEventListener("scroll", position, true);
+      win?.removeEventListener("storage", onStorage); win?.removeEventListener("focus", onVisible); win?.removeEventListener("resize", position);
       win?.visualViewport?.removeEventListener("resize", position);
       win?.visualViewport?.removeEventListener("scroll", position);
       resizeObserver?.disconnect();

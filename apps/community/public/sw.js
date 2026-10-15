@@ -29,6 +29,7 @@ self.addEventListener("push", (event) => {
   const options = {
     body: typeof payload.body === "string" ? payload.body : "",
     tag: typeof payload.tag === "string" ? payload.tag : undefined,
+    renotify: typeof payload.tag === "string" && Boolean(payload.tag),
     data: { url: safeUrl(payload.url) },
     icon: "/icons/app-icon-v2-192.png",
     badge: "/icons/cloud-agent-v1-48.png",
