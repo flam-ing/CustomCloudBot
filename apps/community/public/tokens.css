@@ -133,6 +133,89 @@ code, kbd, pre, samp, .token-box code, .setup-command { font-family: var(--font-
 .auth-panel h1, .empty-state h2, .startup-view strong, .voice-call-dialog h2 { font-size: var(--fs-2xl); }
 .empty-state h2, .voice-call-dialog h2 { font-weight: var(--fw-semibold); }
 
+/* ------------------------------------------------------------------ focus */
+/* One keyboard focus style everywhere: a 2px accent ring just outside. */
+:focus-visible,
+.notification-center button:focus-visible, .notification-panel button:focus-visible,
+.routines-dialog :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+/* Rows inside scrolling lists draw the ring inside so it is never clipped. */
+.branch-row:focus-visible, .room-item:focus-visible, .profile-menu-item:focus-visible,
+.quick-model-option:focus-visible, .dock-menu button:focus-visible,
+.notification-item:focus-visible, .model-card:focus-visible,
+.sidebar-dialog > button:focus-visible, .topic-choice-buttons button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+/* A dialog that holds focus itself needs no ring; the resize edge lights up
+   in its own way. */
+:is(dialog, [popover], [role="dialog"]):focus-visible, .sidebar-resizer:focus-visible { outline: none; }
+
+/* Text fields: the border turns accent and a soft halo appears. The
+   transparent outline keeps a visible ring in Windows high-contrast mode. */
+:is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]), textarea, select):focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 0;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-halo);
+}
+/* Borderless fields live inside a framed box; the frame shows focus instead. */
+.composer textarea:focus-visible, .search-field input:focus-visible,
+.workspace-browser-keyboard:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+/* The composer holds focus most of the time, so its ring is a step softer
+   while still 3:1 against the page. */
+.composer:focus-within {
+  border-color: rgba(121, 86, 181, .78);
+  box-shadow: var(--glass-shadow), 0 0 0 3px rgba(121, 86, 181, .12);
+}
+
+/* ------------------------------------------------------------ form fields */
+button, input, textarea, select { font: inherit; color: inherit; }
+input[type="checkbox"], input[type="radio"], input[type="range"], progress { accent-color: var(--accent); }
+::placeholder { color: var(--dim); opacity: 1; }
+
+.auth-form input, .modal input, .modal textarea, .sidebar-dialog input,
+.room-sharing-field input, .routine-field input, .routine-field textarea, .routine-field select,
+.setup-field input, .setup-field select, .model-search, .context-provider-select {
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  background-color: var(--glass-field, rgba(255, 255, 255, .29));
+  color: var(--text);
+  font-size: var(--fs-md);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.auth-form input, .modal input, .sidebar-dialog input, .room-sharing-field input,
+.routine-field input, .routine-field select, .setup-field input, .setup-field select {
+  min-height: var(--control-h);
+  padding: 9px 12px;
+}
+.context-provider-select { min-height: var(--control-h-sm); padding: 6px 10px; font-size: var(--fs-sm); }
+.auth-form input:hover, .modal :is(input, textarea):hover, .sidebar-dialog input:hover,
+.room-sharing-field input:hover, .routine-field :is(input, textarea, select):hover,
+.setup-field :is(input, select):hover { border-color: var(--field-border-hover); }
+/* A field the person has left wrong turns rose. */
+input:user-invalid, textarea:user-invalid, select:user-invalid { border-color: var(--danger-text); }
+
+/* Selects draw one chevron in every browser, including Safari. */
+select:not([multiple]):not([size]) {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 32px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px 14px;
+  cursor: pointer;
+}
+select:not([multiple]):not([size]):disabled { cursor: default; opacity: .5; }
+.model-controls select:not([multiple]):not([size]) { padding-right: 26px; background-position: right 7px center; background-size: 12px 12px; }
+select option { background: #faf8ff; color: var(--text); }
+
 /* ----------------------------------------------------------------- icons */
 /* Two icon sizes: 20px on their own, 16px next to words. */
 .icon { width: var(--icon-md); height: var(--icon-md); }
