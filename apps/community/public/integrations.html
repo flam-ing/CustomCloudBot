@@ -1,1 +1,46 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>연결 서비스 · CustomCloudBot</title><link rel="stylesheet" href="/integrations.css"></head><body data-page-title="연결 서비스"><main><a href="/">← 대화로 돌아가기</a><h1>연결 서비스</h1><p><a id="personal-chat" href="/">개인 비서 대화 열기 →</a></p><p>서버에 등록된 서비스 연결을 관리자가 확인하는 화면입니다. 대화에서 사용할 수 있는 서비스는 각 연결의 권한과 공유 설정을 따릅니다. AI 연결과 봇 이름은 사이드바의 ‘내 봇 설정’에서 관리하세요.</p><p id="status" role="status">연결 목록을 불러오는 중…</p><section class="assistant"><h2>개인 서비스에 질문하기</h2><p>요청한 조회 결과를 연결된 AI 모델이 읽고 답합니다. 이 답변은 이 화면에서만 표시됩니다.</p><form id="ask-form"><input id="ask-prompt" aria-label="개인 서비스 질문" placeholder="최근 받은 메일을 요약해 줘" maxlength="2000" required><button id="ask-button">질문</button></form><pre id="answer" aria-live="polite"></pre></section><section id="services"></section><h2>모델 공급자</h2><p>자동순환은 실패한 키를 잠시 제외하고 다음 공급자를 시도합니다. 지정 모델은 같은 모델을 제공하는 키만 재시도합니다.</p><button id="models">모델 연결 확인</button><pre id="model-result"></pre></main><script type="module" src="/integrations.js"></script></body></html>
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f4f2fa">
+<title>연결 서비스 · CustomCloudBot</title>
+<link rel="icon" href="/icons/app-icon-v2-48.png" type="image/png" sizes="48x48">
+<link rel="stylesheet" href="/glass.css">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/integrations.css">
+</head>
+<body data-page-title="연결 서비스">
+<main class="integ">
+  <nav class="integ-nav" aria-label="이동">
+    <a class="integ-link" href="/">← 대화로 돌아가기</a>
+    <a id="personal-chat" class="integ-link" href="/">개인 비서 대화 열기</a>
+  </nav>
+  <header class="integ-head">
+    <h1>연결 서비스</h1>
+    <p>서버에 등록된 서비스 연결을 관리자가 확인하는 화면입니다. 대화에서 쓸 수 있는 서비스는 각 연결의 권한과 공유 설정을 따릅니다. AI 연결과 봇 이름은 ‘내 봇 설정’에서 관리하세요.</p>
+    <p id="status" class="integ-status" role="status">연결 목록을 불러오는 중…</p>
+  </header>
+  <section class="integ-card integ-ask" aria-labelledby="ask-title">
+    <h2 id="ask-title">개인 서비스에 질문하기</h2>
+    <p class="integ-note">연결된 AI 모델이 서비스를 읽기만 해서 답합니다. 답변은 이 화면에만 보입니다.</p>
+    <form id="ask-form" class="integ-ask-form">
+      <input id="ask-prompt" aria-label="개인 서비스 질문" placeholder="최근 받은 메일을 요약해 줘" maxlength="2000" required>
+      <button id="ask-button" class="integ-button integ-primary" type="submit">질문</button>
+    </form>
+    <div id="answer" class="integ-answer" aria-live="polite"></div>
+  </section>
+  <section aria-labelledby="services-title">
+    <h2 id="services-title" class="integ-section-title">서비스</h2>
+    <div id="services" class="integ-grid"></div>
+  </section>
+  <section class="integ-card" aria-labelledby="models-title">
+    <h2 id="models-title">AI 모델 공급자</h2>
+    <p class="integ-note">자동 선택은 실패한 키를 잠시 빼고 다음 공급자를 시도합니다. 모델을 지정하면 같은 모델을 제공하는 키만 다시 시도합니다.</p>
+    <button id="models" class="integ-button" type="button">모델 연결 확인</button>
+    <div id="model-result" class="integ-result" aria-live="polite"></div>
+  </section>
+</main>
+<script type="module" src="/integrations.js"></script>
+</body>
+</html>
