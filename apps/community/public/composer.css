@@ -43,6 +43,7 @@
   gap: 8px;
   min-width: 0;
   padding: 0;
+  container-type: inline-size;
 }
 .composer-tools,
 .composer-send {
@@ -214,7 +215,7 @@
 .bot-picker .bot-option:hover { background: var(--hover, rgba(126, 96, 180, .08)); }
 .bot-picker .bot-option input { width: 18px; height: 18px; flex: none; accent-color: var(--accent, #7956b5); }
 .bot-picker .bot-option strong { color: var(--text, #2e3242); font-size: var(--fs-md, 14px); }
-.bot-picker .bot-option small { color: var(--muted, #606679); font-size: var(--fs-xs, 12px); line-height: 1.45; }
+.bot-picker .bot-option small { color: var(--muted, #606679); font-size: var(--fs-xs, 12px); line-height: 1.45; word-break: keep-all; overflow-wrap: break-word; }
 .bot-picker .picker-note { color: var(--muted, #606679); font-size: var(--fs-sm, 13px); }
 
 /* More menu: room actions as plain rows with a label. */
@@ -351,6 +352,8 @@
   color: var(--warning, #986622);
   font-size: var(--fs-xs, 12px);
   line-height: 1.5;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 .model-popover .composer-popover-heading:not(:first-child) { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line, rgba(79, 97, 124, .15)); }
 .model-popover-hint { margin: -2px 10px 8px; color: var(--muted, #606679); font-size: var(--fs-xs, 12px); }
@@ -412,13 +415,13 @@
   color: var(--accent-strong, #654296);
 }
 .attachment-mark { border-radius: var(--radius-sm, 8px); }
-.attachment-play { cursor: pointer; }
+.attachment-play { position: relative; cursor: pointer; }
 .attachment-play:hover { background: rgba(121, 86, 181, .22); }
 .attachment-play .icon { width: 16px; height: 16px; }
 .icon.icon-filled { fill: currentColor; stroke: none; }
 .attachment-copy { display: grid; gap: 1px; min-width: 0; }
 .composer .attachment-name { overflow: hidden; color: var(--text, #2e3242); font-weight: var(--fw-medium, 500); text-overflow: ellipsis; white-space: nowrap; }
-.attachment-status { color: var(--muted, #606679); font-size: 11px; white-space: nowrap; }
+.attachment-status { color: var(--muted, #606679); font-size: var(--fs-xs, 12px); white-space: nowrap; }
 .composer .attachment-card.is-uploading .attachment-status { color: var(--accent-strong, #654296); }
 .composer .attachment-card.is-error { border-color: rgba(170, 59, 96, .32); background: #fdf3f6; }
 .composer .attachment-card.is-error .attachment-status { color: var(--danger-text, #aa3b60); }
@@ -530,6 +533,8 @@
   pointer-events: none;
 }
 .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+/* Split view: the 46px pane headers hold titles and actions, so notices sit just below them. */
+:root:has(.main-panel.is-split) .toast { top: max(56px, calc(env(safe-area-inset-top) + 8px)); }
 /* Stays rendered (invisible) while closed so screen readers keep the live region. */
 .toast { display: block; }
 .toast::backdrop { display: none; }
@@ -553,8 +558,9 @@
 .confirm-dialog h2 { margin: 0 0 8px; font-size: var(--fs-xl, 18px); font-weight: var(--fw-semibold, 600); line-height: 1.4; letter-spacing: -.2px; }
 .confirm-dialog p { margin: 0; color: var(--muted, #606679); font-size: var(--fs-md, 14px); line-height: 1.6; overflow-wrap: anywhere; word-break: keep-all; text-wrap: pretty; }
 .confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: var(--space-6, 24px); }
-/* Zero-specificity fallbacks; the shared .btn styles in tokens.css win. */
-:where(.confirm-dialog-actions) :where(.btn) {
+/* Fallbacks with the weight of one element: they beat the bare `button` rules in
+   styles.css (color: inherit) and still lose to the shared .btn-* classes in tokens.css. */
+button:where(.confirm-dialog-actions .btn) {
   min-width: 72px;
   height: 40px;
   padding: 0 16px;
@@ -565,10 +571,10 @@
   white-space: nowrap;
   cursor: pointer;
 }
-:where(.confirm-dialog-actions) :where(.btn-secondary) { border-color: var(--line, rgba(79, 97, 124, .15)); background: #fff; color: var(--text, #2e3242); }
-:where(.confirm-dialog-actions) :where(.btn-secondary:hover) { background: #f4f0fb; }
-:where(.confirm-dialog-actions) :where(.btn-danger) { background: var(--danger, #b9425a); color: #fff; }
-:where(.confirm-dialog-actions) :where(.btn-danger:hover) { background: #a3354c; }
+button:where(.confirm-dialog-actions .btn-secondary) { border-color: var(--line, rgba(79, 97, 124, .15)); background: #fff; color: var(--text, #2e3242); }
+button:where(.confirm-dialog-actions .btn-secondary:hover) { background: #f4f0fb; }
+button:where(.confirm-dialog-actions .btn-danger) { background: var(--danger, #b9425a); color: #fff; }
+button:where(.confirm-dialog-actions .btn-danger:hover) { background: #a3354c; }
 
 /* ---------- Touch: 44px targets, 16px text so iOS does not zoom ---------- */
 @media (pointer: coarse) {
@@ -606,6 +612,12 @@
   .effort-option span { height: 40px; }
   .recording-action { height: var(--tap, 44px); }
   .composer .attachment-remove { width: 32px; height: 32px; right: 2px; }
+  .attachment-play::before { content: ""; position: absolute; inset: -4px; }
+  /* The clear borders above only widen the target; keep the focus ring on the visible shape. */
+  .composer-chip:focus-visible { outline-offset: -4px; }
+  .composer-icon:focus-visible,
+  .composer .send-button:focus-visible,
+  .composer .context-controls .context-trigger:focus-visible { outline-offset: -2px; }
 }
 
 /* ---------- Narrow screens ---------- */
@@ -620,7 +632,7 @@
   .composer .context-controls .context-trigger { padding: 0; }
   .composer .model-trigger.composer-chip { max-width: none; }
 }
-@media (max-width: 480px) {
+@container (max-width: 440px) {
   .bot-chip { padding-right: 8px; }
   .bot-chip .composer-chip-label { display: none; }
 }
