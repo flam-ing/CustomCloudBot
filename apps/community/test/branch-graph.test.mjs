@@ -36,3 +36,32 @@ test('a merge keeps its operation label with one accessible parent, but no-paren
   assert.equal(result.rows.find(row=>row.id==='b').operation,'merge');assert.equal(result.rows.find(row=>row.id==='c').operation,'root');
   assert.equal(result.edges.length,1);
 });
+test('manual placement allows children above parents without changing lineage, merge labels or lanes', () => {
+  const baseline=layoutBranches(rooms,links), order=['merge','deep','b','a','root','other'];
+  const result=layoutBranches(rooms,links,{order}), byId=new Map(result.rows.map(row=>[row.id,row]));
+  assert.deepEqual(result.rows.map(row=>row.id),order);
+  assert.deepEqual(result.rows.map(row=>row.index),[0,1,2,3,4,5]);
+  assert.deepEqual(result.edges,baseline.edges);
+  assert.equal(result.laneCount,baseline.laneCount);
+  for(const row of baseline.rows)assert.deepEqual(byId.get(row.id),{...row,index:order.indexOf(row.id)});
+  assert(byId.get('merge').index<byId.get('deep').index);
+  assert.deepEqual(byId.get('merge').parents,['deep','b']);
+  assert.equal(byId.get('merge').operation,'merge');
+  assert.deepEqual(layoutBranches(rooms,links),baseline);
+});
+test('partial manual order ignores duplicates and missing IDs and appends unlisted rows in default order', () => {
+  const updated=[...rooms,{id:'new',name:'new',createdAt:20}], baseline=layoutBranches(updated,links);
+  const order=['deep','missing','deep','a'], result=layoutBranches(updated,links,{order});
+  assert.deepEqual(result.rows.map(row=>row.id),['deep','a',...baseline.rows.filter(row=>!['deep','a'].includes(row.id)).map(row=>row.id)]);
+  assert.deepEqual(result.rows.map(row=>row.index),result.rows.map((_,index)=>index));
+  assert.deepEqual(result.edges,baseline.edges);
+  assert.deepEqual(layoutBranches(updated,links,{order}),result);
+  assert.deepEqual(order,['deep','missing','deep','a']);
+  assert.deepEqual(layoutBranches(updated,links,{order:null}),baseline);
+});
+test('manual order preserves search ancestors even when they follow the matching child', () => {
+  const result=layoutBranches(rooms,links,{query:'merge',order:['other','merge','deep','b','a','root']});
+  assert.deepEqual(result.rows.map(row=>row.id),['merge','deep','b','a','root']);
+  assert.deepEqual(result.rows.filter(row=>row.matched).map(row=>row.id),['merge']);
+  assert.deepEqual(result.edges,layoutBranches(rooms,links,{query:'merge'}).edges);
+});

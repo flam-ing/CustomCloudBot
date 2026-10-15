@@ -49,7 +49,7 @@ test('sidebar groups are per-user, membership is validated, deleting groups pres
   assert.equal((await f.call('/api/sidebar',{body,method:'PUT'})).status,401);
   assert.equal((await f.call('/api/sidebar',{auth:f.owner,body,method:'PUT',csrf:false})).status,403);
   assert.equal((await f.call('/api/sidebar',{auth:f.owner,body,method:'PUT'})).status,200);
-  assert.deepEqual((await f.call('/api/sidebar',{auth:f.outsider})).data,{width:280,groups:[]});
+  assert.deepEqual((await f.call('/api/sidebar',{auth:f.outsider})).data,{width:280,groups:[],roomOrder:[]});
   assert.equal((await f.call(`/api/rooms/${f.room}/preferences`,{auth:f.owner,body:{pinned:true,archived:false,groupId:group}})).status,200);
   assert.equal((await f.call(`/api/rooms/${f.room}/preferences`,{auth:f.owner,body:{pinned:true,archived:false,groupId:randomUUID()}})).status,400);
   assert.equal((await f.call('/api/sidebar',{auth:f.owner,body:{width:300,groups:[]},method:'PUT'})).status,200);

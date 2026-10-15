@@ -23,7 +23,7 @@ export function relatedBranchIds(roomId, rooms, links) {
   const mine = ancestry(roomId, parents);
   return [...nodes.values()].filter(room => room.id !== roomId && !room.archived && [...ancestry(room.id, parents)].some(id => mine.has(id))).map(room => room.id);
 }
-export function layoutBranches(rooms, links, {query = ''} = {}) {
+export function layoutBranches(rooms, links, {query = '', order = []} = {}) {
   const active = rooms.filter(room => !room.archived), {nodes, parents} = graph(active, links);
   const operations = new Map((links || []).filter(Boolean).map(link => [link.id, link.operation]));
   const position = new Map(active.map((room, index) => [room.id, index]));
@@ -58,5 +58,11 @@ export function layoutBranches(rooms, links, {query = ''} = {}) {
     rows.push(row); placed.set(id, row);
     if (remaining.get(id)) occupied.set(lane, id);
   }
-  return {rows, edges: rows.flatMap(row => row.parents.map((parent, index) => ({from: parent, to: row.id, secondary: index > 0}))), laneCount: rows.length ? Math.max(...rows.map(row => row.lane)) + 1 : 0};
+  const edges = rows.flatMap(row => row.parents.map((parent, index) => ({from: parent, to: row.id, secondary: index > 0})));
+  // User placement changes display positions, never lineage or the lanes derived
+  // from it. A child can appear above its parent without losing their edge.
+  const ranks = new Map();
+  for (const id of Array.isArray(order) ? order : []) if (typeof id === 'string' && !ranks.has(id)) ranks.set(id, ranks.size);
+  const displayed = ranks.size ? [...rows].sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity) || a.index - b.index).map((row, index) => ({...row, index})) : rows;
+  return {rows: displayed, edges, laneCount: rows.length ? Math.max(...rows.map(row => row.lane)) + 1 : 0};
 }

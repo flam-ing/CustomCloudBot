@@ -45,3 +45,10 @@
 .topic-choice-buttons button:hover, .topic-choice-buttons button:focus-visible { background: #2b2736; border-color: #b7a1df; }
 .topic-choice-buttons strong { font-size: 15px; }
 .topic-choice-buttons span { color: #aaa6b1; font-size: 13px; }
+/* The gap moves a session; overlapping its title offers a context merge. */
+body.session-dragging, body.session-dragging * { cursor:grabbing!important; user-select:none!important; }
+.dock-preview[data-drop-kind="order"] { min-height:4px; border:0; border-radius:3px; background:var(--glass-accent,#9272cb); box-shadow:0 0 0 3px #a98bd32b; }
+.dock-preview[data-drop-kind="merge"] { border:2px solid var(--glass-accent,#9272cb); background:#c1a6ea38; color:var(--text); font-weight:650; font-size:12px; padding:6px; }
+.dock-preview[data-drop-kind="blocked"] { border:1px dashed #9b7680; background:#c8a5ae26; color:var(--muted); font-size:12px; }
+.session-drag-hint { position:fixed; z-index:90; pointer-events:none; left:16px; bottom:20px; max-width:270px; width:max-content; height:max-content; padding:10px 14px; border:1px solid #ffffffb3; border-radius:12px; background:var(--glass-panel,#f6f3fcdd); color:var(--text); box-shadow:0 8px 32px #34304426; backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); font-size:12px; line-height:1.5; }
+.session-drag-hint[hidden] { display:none; }

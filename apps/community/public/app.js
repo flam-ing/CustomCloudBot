@@ -11,7 +11,7 @@ import { createInviteLink, createInviteLinks } from "/invite-links.mjs";
 import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
-import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
+import { layoutBranches } from "/branch-graph.mjs";
 import { sessionColors } from "/session-colors.js";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
@@ -380,8 +380,8 @@ async function loadRooms() {
   }
 }
 let showDeletedRooms=false;
-let sidebarState={userId:null,groups:[],width:280,loaded:false};
-let sidebarConfirmed={groups:[],width:280};
+let sidebarState={userId:null,groups:[],roomOrder:[],width:280,loaded:false};
+let sidebarConfirmed={groups:[],roomOrder:[],width:280};
 let sidebarEpoch=0,sidebarRevision=0,sidebarWriteQueue=Promise.resolve();
 let sidebarPreviewWidth=null,sidebarWidthTimer=null;
 function sidebarWidthBounds(viewport=innerWidth) {
@@ -399,12 +399,12 @@ function applySidebarWidth() {
 function resetSidebarState(userId=null) {
   sidebarEpoch+=1;sidebarRevision=0;showDeletedRooms=false;
   clearTimeout(sidebarWidthTimer);sidebarWidthTimer=null;sidebarPreviewWidth=null;
-  sidebarState={userId,groups:[],width:280,loaded:false};sidebarConfirmed={groups:[],width:280};
+  sidebarState={userId,groups:[],roomOrder:[],width:280,loaded:false};sidebarConfirmed={groups:[],roomOrder:[],width:280};
   els.workspace.classList.remove("sidebar-resizing","sidebar-collapsed");applySidebarWidth();
   $("#create-sidebar-group").disabled=true;
 }
 function sidebarConfig(value) {
-  return {groups:Array.isArray(value?.groups)?value.groups.map(group=>({id:group.id,name:group.name,collapsed:!!group.collapsed})):[],width:Math.max(200,Math.min(420,Number(value?.width)||280))};
+  return {roomOrder:Array.isArray(value?.roomOrder)?[...value.roomOrder]:[],groups:Array.isArray(value?.groups)?value.groups.map(group=>({id:group.id,name:group.name,collapsed:!!group.collapsed})):[],width:Math.max(200,Math.min(420,Number(value?.width)||280))};
 }
 async function loadSidebar() {
   const userId=state.session?.user?.id,epoch=sidebarEpoch;if(!userId)return;
@@ -567,7 +567,7 @@ function updateBranchControls() {
   const fork = $("#branch-fork"), merge = $("#branch-merge"), label = $("#branch-current");
   if (!fork) return;
   fork.disabled = !available || branchBusy(id);
-  merge.disabled = !available || branchBusy(id) || !relatedBranches(id).length;
+  merge.disabled = !available || branchBusy(id) || !mergeCandidates(id).length;
   fork.setAttribute("aria-label", available ? `${room.name}에서 Fork` : "현재 가지에서 Fork");
   label.textContent = available ? room.name : "새 줄기에서 시작하세요";
 }
@@ -603,7 +603,7 @@ function renderRooms() {
     }
     if (!archived.length) { const empty = document.createElement("p"); empty.className = "search-empty"; empty.textContent = "보관된 가지가 없습니다."; els.roomList.append(empty); }
   } else {
-    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks);
+    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder});
     const graphList = document.createElement("div"); graphList.className = "branch-graph";
     const width = Math.min(72, Math.max(30, graph.laneCount * 13 + 12)), step = graph.laneCount > 1 ? (width - 18) / (graph.laneCount - 1) : 0;
     graphList.style.setProperty("--branch-rail", width + "px");
@@ -611,7 +611,8 @@ function renderRooms() {
     const byId = new Map(graph.rows.map(row => [row.id,row])), x = row => 9 + row.lane * step, y = row => row.index * 56 + 28;
     for (const edge of graph.edges) {
       const from = byId.get(edge.from), to = byId.get(edge.to), fromX=x(from), toX=x(to), end=y(to), start=y(from);
-      const d = fromX === toX ? `M${fromX},${start}V${end}` : `M${fromX},${start}V${end-18}Q${fromX},${end} ${(fromX+toX)/2},${end}H${toX}`;
+      const direction = end >= start ? 1 : -1;
+      const d = fromX === toX ? `M${fromX},${start}V${end}` : `M${fromX},${start}V${end-18*direction}Q${fromX},${end} ${(fromX+toX)/2},${end}H${toX}`;
       svg.append(branchSvg("path", {d, style:`--branch-color:${colors.get(from.id)?.color || "currentColor"}`, class:`branch-path branch-color-${from.lane % 3}${edge.secondary ? " is-merge" : ""}`}));
     }
     for (const row of graph.rows) {
@@ -624,6 +625,8 @@ function renderRooms() {
       const meta=document.createElement("small"), parentNames=row.parents.map(id=>byId.get(id)?.room.name).filter(Boolean);
       const relation=row.operation==="merge"?"Merge":row.operation==="fork"?"Fork":"줄기";
       meta.textContent=relation+(parentNames.length?" · "+parentNames.join(" + "):"")+(row.room.pinned?" · 고정":"");
+      button.title = "드래그: 목록 사이에서 순서 이동 · 제목 위에서 Merge · 대화 영역에서 분할";
+      button.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
       button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":""}`);
       copy.append(name,meta); button.append(copy); paintSession(button, colors.get(row.id));
       button.onclick=()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,row.id);else void selectRoom(row.id);closeSidebar();};
@@ -1530,8 +1533,8 @@ async function refreshContextOwner(pane) {
   if (pane) await refreshExtra(state.extra.indexOf(pane));
   else await refreshRoom(true);
 }
-function relatedBranches(roomId) {
-  return relatedBranchIds(roomId, state.rooms.filter(room=>room.id!==MONITOR_ROOM), state.forks).map(id=>state.rooms.find(room=>room.id===id));
+function mergeCandidates(roomId) {
+  return state.rooms.filter(room => room.id !== roomId && room.id !== MONITOR_ROOM && !room.archived);
 }
 function branchDestination(pane = null, explicit = false) {
   const target = explicit && state.focusPane > 0 ? state.extra[state.focusPane-1] : pane;
@@ -1545,33 +1548,37 @@ async function openBranchResult(data, destination) {
   renderRooms();closeSidebar();
   toast(data.contextTruncated?"맥락이 길어 일부만 이어받았습니다. 원본 가지에서 전체 기록을 볼 수 있어요.":"새 가지를 만들었습니다. 원본은 그대로 남습니다.");
 }
-function mergeBranch(roomId) {
-  const room=state.rooms.find(item=>item.id===roomId&&!item.archived), branches=relatedBranches(roomId);
-  if(!room||branchBusy(roomId))return;
-  if(!branches.length){toast("합칠 가지가 없습니다. 먼저 Fork로 가지를 만들어 주세요.");return;}
-  const destination=branchDestination(null,true),dialog=sidebarDialog("가지 Merge"),form=document.createElement("form");dialog.classList.add("branch-merge-dialog");
-  const note=document.createElement("p");note.className="sidebar-dialog-note";note.textContent="두 가지의 현재 맥락으로 새 가지를 만듭니다. 원본 가지는 유지됩니다.";
+function mergeBranch(roomId, sourceId = null) {
+  const room=state.rooms.find(item=>item.id===roomId&&!item.archived), branches=mergeCandidates(roomId);
+  if(!room)return;
+  if(roomId===MONITOR_ROOM){toast("대시보드는 합칠 수 없습니다.");return;}
+  if(sourceId && !branches.some(branch=>branch.id===sourceId)){toast("합칠 대화를 다시 선택해 주세요.");return;}
+  if(sourceId && branchBusy(sourceId)){toast("진행 중인 작업이 끝난 뒤 합쳐 주세요.");return;}
+  if(branchBusy(roomId)){toast("진행 중인 작업이 끝난 뒤 합쳐 주세요.");return;}
+  if(!branches.length){toast("함께 합칠 다른 대화가 없습니다.");return;}
+  const destination=branchDestination(null,true),dialog=sidebarDialog("대화 합치기 · Merge"),form=document.createElement("form");dialog.classList.add("branch-merge-dialog");
+  const note=document.createElement("p");note.className="sidebar-dialog-note";note.textContent="두 대화의 내용을 함께 이어갈 새 세션을 만듭니다. 원래 대화 두 개는 그대로 남습니다.";
   const label=document.createElement("label");label.textContent="함께 이어갈 가지";
   const select=document.createElement("select");select.required=true;
   for(const branch of branches){const option=document.createElement("option");option.value=branch.id;option.textContent=branch.name+" · "+branch.id.slice(0,8);option.disabled=branchBusy(branch.id);select.append(option);}
-  const first=branches.find(branch=>!branchBusy(branch.id));select.value=first?.id||"";label.append(select);
+  const first=branches.find(branch=>branch.id===sourceId&&!branchBusy(branch.id))||branches.find(branch=>!branchBusy(branch.id));select.value=first?.id||"";label.append(select);
   const preview=document.createElement("p");preview.className="branch-merge-preview";
   const error=document.createElement("p");error.className="form-message";error.setAttribute("role","status");
   const actions=document.createElement("div");actions.className="sidebar-dialog-actions";
   const cancel=document.createElement("button");cancel.type="button";cancel.textContent="취소";cancel.onclick=()=>dialog.close();
-  const submit=document.createElement("button");submit.type="submit";submit.textContent="새 가지로 Merge";submit.disabled=!first;
+  const submit=document.createElement("button");submit.type="submit";submit.textContent="합쳐서 새 세션 만들기";submit.disabled=!first;
   const update=()=>{preview.textContent=room.name+" + "+(branches.find(branch=>branch.id===select.value)?.name||"가지 선택")+" → 새 가지";};select.onchange=update;update();
   actions.append(cancel,submit);form.append(note,label,preview,error,actions);dialog.append(form);
   form.onsubmit=async event=>{
     event.preventDefault();const sourceId=select.value;
-    if(submit.disabled||!destination.valid()||!relatedBranches(roomId).some(branch=>branch.id===sourceId))return;
+    if(submit.disabled||!destination.valid()||!mergeCandidates(roomId).some(branch=>branch.id===sourceId))return;
     if(branchBusy(roomId)||branchBusy(sourceId)){error.textContent="진행 중인 작업이 끝난 뒤 합쳐 주세요.";return;}
     branchOperations.add(roomId);branchOperations.add(sourceId);select.disabled=true;submit.disabled=true;updateModelAvailability();
     try{const data=await api(`/api/rooms/${encodeURIComponent(roomId)}/merge`,{method:"POST",body:JSON.stringify({sourceId})});if(!destination.valid())return;const follow=dialog.open;dialog.close();if(follow)await openBranchResult(data,destination);else await loadRooms();}
     catch(e){if(destination.valid()&&dialog.open)error.textContent=e.message;}
     finally{if(destination.valid()){branchOperations.delete(roomId);branchOperations.delete(sourceId);select.disabled=false;submit.disabled=false;updateModelAvailability();}}
   };
-  dialog.showModal();select.focus();
+  dialog.showModal();if(sourceId)submit.focus();else select.focus();
 }
 async function sessionAction(action, pane = null, button = null, throughMessageId = null, expectedRoomId = null, explicitRoomId = null) {
   const owner=roomContextOwner(pane),roomId=explicitRoomId||owner.roomId,destination=branchDestination(pane,!!explicitRoomId);
@@ -2510,60 +2517,128 @@ function placeDock(index, side) {
   $("#pane-grid").dataset.panes=String(state.layout);
   renderExtraPanes(); renderRooms(); refreshExtras(); applyDockLayout();
 }
+async function moveSession(roomId, targetId, after = false) {
+  if (!sidebarState.loaded || roomId === targetId) return;
+  const order = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder}).rows.map(row => row.id);
+  if (!order.includes(roomId) || !order.includes(targetId)) return;
+  const next = order.filter(id => id !== roomId), index = next.indexOf(targetId) + (after ? 1 : 0);
+  next.splice(index, 0, roomId);
+  if (next.every((id, i) => id === order[i])) return;
+  const userId = state.session?.user?.id, epoch = sidebarEpoch;
+  if (await saveSidebar({...sidebarState, roomOrder:next}) && state.session?.user?.id === userId && sidebarEpoch === epoch) toast("대화 순서를 저장했습니다.");
+}
 function setupDock() {
-  const grid=$("#pane-grid"), preview=document.createElement("div"), menu=document.createElement("div");
-  preview.className="dock-preview"; preview.hidden=true; preview.textContent="여기에 놓기"; document.body.append(preview);
+  const grid=$("#pane-grid"), preview=document.createElement("div"), menu=document.createElement("div"), hint=document.createElement("div");
+  preview.className="dock-preview"; preview.hidden=true; document.body.append(preview);
+  hint.className="session-drag-hint";hint.hidden=true;hint.setAttribute("role","status");hint.setAttribute("aria-live","polite");document.body.append(hint);
   menu.className="dock-menu"; menu.hidden=true; menu.setAttribute("role","menu"); document.body.append(menu);
-  const hide=()=>{preview.hidden=true; menu.hidden=true;};
-  function previewAt(panel,event) {
-    const side=dockZone(panel,event), r=panel.getBoundingClientRect();
-    let x=r.left,y=r.top,w=r.width,h=r.height;
-    if (pendingDock?.index === undefined) {
-      if(side==="left"||side==="right"){w/=2;if(side==="right")x+=w;}
-      else {h/=2;if(side==="bottom")y+=h;}
+  let pointerDock = null, suppressClick = false, scrollFrame = null;
+  const sourceRoom = () => pendingDock?.roomId || (pendingDock?.index !== undefined ? dockRoomAt(pendingDock.index) : null);
+  const hide=()=>{preview.hidden=true;hint.hidden=true;menu.hidden=true;};
+  function dropAt(event) {
+    const hit=document.elementFromPoint(event.clientX,event.clientY), sourceId=sourceRoom();
+    if(!hit || !sourceId)return null;
+    const row=hit.closest(".branch-row[data-dock-room]");
+    if(row){
+      const targetId=row.dataset.dockRoom;if(targetId===sourceId)return null;
+      const rect=row.getBoundingClientRect(), fraction=(event.clientY-rect.top)/rect.height;
+      if(fraction<.25||fraction>.75)return {kind:"order",row,targetId,after:fraction>.75};
+      return {kind:"merge",row,targetId};
     }
-    Object.assign(preview.style,{left:x+"px",top:y+"px",width:w+"px",height:h+"px"});preview.hidden=false;
-    return side;
+    if(hit.closest("#room-list")){
+      const rows=$$(".branch-row[data-dock-room]",els.roomList);if(!rows.length)return null;
+      const first=rows[0],last=rows[rows.length-1],before=event.clientY<first.getBoundingClientRect().top;
+      const target=before?first:last;if(target.dataset.dockRoom===sourceId)return null;
+      return {kind:"order",row:target,targetId:target.dataset.dockRoom,after:!before};
+    }
+    const panel=hit.closest("#pane-grid > .room-view");if(!panel)return null;
+    const index=Number(panel.dataset.dockIndex),targetId=dockRoomAt(index);
+    if(hit.closest(".pane-bar")&&targetId&&targetId!==sourceId)return {kind:"merge",row:panel.querySelector(".pane-bar"),targetId};
+    if(pendingDock?.index===index)return null;
+    return {kind:"dock",panel,index,side:dockZone(panel,event)};
   }
-  let pointerDock = null, suppressClick = false;
+  function previewDrop(drop,event) {
+    if(!drop){preview.hidden=true;hint.textContent="목록 사이: 순서 이동 · 제목 위: Merge · 대화 안: 분할";hint.hidden=false;return;}
+    let rect,label,kind=drop.kind;
+    if(kind==="order"){
+      rect=drop.row.getBoundingClientRect();rect={left:rect.left,top:(drop.after?rect.bottom:rect.top)-2,width:rect.width,height:4};
+      label="이 위치로 이동";
+    }else if(kind==="merge"){
+      rect=drop.row.getBoundingClientRect();label="Merge · "+(state.rooms.find(room=>room.id===drop.targetId)?.name||"대화")+"와 합치기";
+      if([sourceRoom(),drop.targetId].some(id=>id===MONITOR_ROOM||!state.rooms.some(room=>room.id===id&&!room.archived))){kind="blocked";label="이 항목은 합칠 수 없어요";}
+      else if(branchBusy(sourceRoom())||branchBusy(drop.targetId)){kind="blocked";label="작업이 끝난 뒤 합칠 수 있어요";}
+    }else{
+      const r=drop.panel.getBoundingClientRect();rect={left:r.left,top:r.top,width:r.width,height:r.height};
+      if(pendingDock?.index===undefined){
+        if(drop.side==="left"||drop.side==="right"){rect.width/=2;if(drop.side==="right")rect.left+=rect.width;}
+        else{rect.height/=2;if(drop.side==="bottom")rect.top+=rect.height;}
+        label="여기에 분할";
+      }else label="창 위치 바꾸기";
+    }
+    preview.dataset.dropKind=kind;preview.textContent=kind==="order"?"":label;
+    Object.assign(preview.style,{left:rect.left+"px",top:rect.top+"px",width:rect.width+"px",height:rect.height+"px"});preview.hidden=false;
+    hint.textContent=label;hint.hidden=false;
+    Object.assign(hint.style,{left:Math.max(8,Math.min(event.clientX+14,innerWidth-280))+"px",top:Math.max(8,Math.min(event.clientY+18,innerHeight-64))+"px"});
+  }
+  function completeDrop(drop) {
+    const roomId=sourceRoom();if(!drop||!roomId)return;
+    if(drop.kind==="order")void moveSession(roomId,drop.targetId,drop.after);
+    else if(drop.kind==="merge"){
+      if(branchBusy(roomId)||branchBusy(drop.targetId)){toast("진행 중인 작업이 끝난 뒤 합쳐 주세요.");return;}
+      mergeBranch(drop.targetId,roomId);
+    }else placeDock(drop.index,drop.side);
+  }
+  function stopPointer() {
+    if(scrollFrame!==null)cancelAnimationFrame(scrollFrame);scrollFrame=null;
+    const drag=pointerDock;pointerDock=null;pendingDock=null;hide();
+    document.body.classList.remove("session-dragging");
+    if(drag&&document.body.hasPointerCapture(drag.id))document.body.releasePointerCapture(drag.id);
+  }
+  function scrollList() {
+    if(!pointerDock?.active)return;
+    if(pointerDock.epoch!==sidebarEpoch){stopPointer();return;}
+    const {lastX:x,lastY:y}=pointerDock,r=els.roomList.getBoundingClientRect();
+    if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom){
+      const delta=y<r.top+32?-9:y>r.bottom-32?9:0;
+      if(delta){els.roomList.scrollTop+=delta;previewDrop(dropAt({clientX:x,clientY:y}),{clientX:x,clientY:y});}
+    }
+    scrollFrame=requestAnimationFrame(scrollList);
+  }
   document.addEventListener("pointerdown", event => {
-    if (event.button !== 0 || pendingDock?.placing || event.target.closest("select,input,textarea")) return;
-    const room = event.target.closest("[data-dock-room]"), handle = event.target.closest(".pane-bar[data-dock-index],.header-identity[data-dock-index]");
-    if (!room && (!handle || event.target.closest("button"))) return;
-    pointerDock = {x:event.clientX,y:event.clientY,source:room ? {roomId:room.dataset.dockRoom} : {index:Number(handle.dataset.dockIndex)}};
+    if(pointerDock?.active)stopPointer();
+    if (event.button!==0 || pendingDock?.placing || event.target.closest("select,input,textarea")) return;
+    const room=event.target.closest("[data-dock-room]"),handle=event.target.closest(".pane-bar[data-dock-index],.header-identity[data-dock-index]");
+    if(!room&&(!handle||event.target.closest("button")))return;
+    pointerDock={id:event.pointerId,epoch:sidebarEpoch,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,source:room?{roomId:room.dataset.dockRoom}:{index:Number(handle.dataset.dockIndex)}};
   });
   document.addEventListener("pointermove", event => {
-    if (!pointerDock) return;
-    if (!pointerDock.active && Math.hypot(event.clientX-pointerDock.x,event.clientY-pointerDock.y)<7) return;
-    pointerDock.active=true;pendingDock=pointerDock.source;
-    event.preventDefault();
-    const panel=document.elementFromPoint(event.clientX,event.clientY)?.closest("#pane-grid > .room-view");
-    if(panel) previewAt(panel,event); else preview.hidden=true;
-  });
+    if(!pointerDock||event.pointerId!==pointerDock.id)return;
+    if(event.buttons===0){stopPointer();return;}
+    if(pointerDock.epoch!==sidebarEpoch){stopPointer();return;}
+    pointerDock.lastX=event.clientX;pointerDock.lastY=event.clientY;
+    if(!pointerDock.active&&Math.hypot(event.clientX-pointerDock.x,event.clientY-pointerDock.y)<7)return;
+    if(!pointerDock.active){pointerDock.active=true;document.body.setPointerCapture(event.pointerId);document.body.classList.add("session-dragging");scrollFrame=requestAnimationFrame(scrollList);}
+    pendingDock=pointerDock.source;event.preventDefault();previewDrop(dropAt(event),event);
+  },{passive:false});
   document.addEventListener("pointerup", event => {
-    if (!pointerDock) return;
-    if(pointerDock.active){
-      const panel=document.elementFromPoint(event.clientX,event.clientY)?.closest("#pane-grid > .room-view");
-      if(panel) placeDock(Number(panel.dataset.dockIndex),dockZone(panel,event));
-      pendingDock=null;hide();suppressClick=true;setTimeout(()=>{suppressClick=false;},0);
-    }
-    pointerDock=null;
+    if(!pointerDock||event.pointerId!==pointerDock.id)return;
+    if(pointerDock.active&&pointerDock.epoch===sidebarEpoch){completeDrop(dropAt(event));suppressClick=true;setTimeout(()=>{suppressClick=false;},0);}
+    stopPointer();
   });
-  document.addEventListener("click", event=>{if(suppressClick){event.preventDefault();event.stopImmediatePropagation();}},true);
-  document.addEventListener("pointercancel",()=>{pointerDock=null;pendingDock=null;hide();});
-  document.addEventListener("dragstart",event=>{
-    const room=event.target.closest("[data-dock-room]"), handle=event.target.closest("[draggable=true][data-dock-index]");
-    if(room) pendingDock={roomId:room.dataset.dockRoom};
-    else if(handle) pendingDock={index:Number(handle.dataset.dockIndex)};
-    else return;
-    event.dataTransfer.setData("text/plain","openclaw-pane"); event.dataTransfer.effectAllowed="move";
+  document.addEventListener("click",event=>{if(suppressClick){event.preventDefault();event.stopImmediatePropagation();}},true);
+  document.addEventListener("pointercancel",stopPointer);
+  document.body.addEventListener("lostpointercapture",event=>{if(event.target===document.body&&pointerDock?.id===event.pointerId)stopPointer();});
+  window.addEventListener("blur",stopPointer);
+  document.addEventListener("dragstart",event=>{if(event.target.closest("[data-dock-room],.pane-bar[data-dock-index]"))event.preventDefault();});
+  grid.addEventListener("pointermove",event=>{if(pendingDock?.placing)previewDrop(dropAt(event),event);});
+  grid.addEventListener("click",event=>{if(pendingDock?.placing){event.preventDefault();event.stopImmediatePropagation();completeDrop(dropAt(event));pendingDock=null;hide();}},true);
+  els.roomList.addEventListener("keydown",event=>{
+    if(!event.altKey||!["ArrowUp","ArrowDown"].includes(event.key))return;
+    const row=event.target.closest(".branch-row");if(!row)return;
+    const rows=$$(".branch-row",els.roomList),index=rows.indexOf(row),target=rows[index+(event.key==="ArrowUp"?-1:1)];
+    event.preventDefault();if(target)void moveSession(row.dataset.roomId,target.dataset.roomId,event.key==="ArrowDown");
   });
-  grid.addEventListener("dragover",event=>{const panel=event.target.closest("[data-dock-index]");if(!panel||!pendingDock)return;event.preventDefault();previewAt(panel,event);});
-  grid.addEventListener("drop",event=>{const panel=event.target.closest("[data-dock-index]");if(!panel||!pendingDock)return;event.preventDefault();placeDock(Number(panel.dataset.dockIndex),dockZone(panel,event));hide();});
-  document.addEventListener("dragend",()=>{pendingDock=null;hide();});
-  grid.addEventListener("pointermove",event=>{const panel=event.target.closest("[data-dock-index]");if(pendingDock?.placing&&panel)previewAt(panel,event);});
-  grid.addEventListener("click",event=>{const panel=event.target.closest("[data-dock-index]");if(pendingDock?.placing&&panel){event.preventDefault();event.stopImmediatePropagation();placeDock(Number(panel.dataset.dockIndex),dockZone(panel,event));hide();}},true);
-  const begin=roomId=>{pendingDock={roomId,placing:true};menu.hidden=true;toast("놓을 위치를 가리킨 뒤 클릭하세요. Esc로 취소합니다.");};
+  const begin=roomId=>{pendingDock={roomId,placing:true};menu.hidden=true;toast("놓을 위치를 가리킨 뒤 클릭하세요. 제목 위는 Merge, 대화 안은 분할입니다.");};
   document.addEventListener("contextmenu",event=>{
     const room=event.target.closest("[data-dock-room]"), panel=event.target.closest("[data-dock-index]");
     if(!room&&!panel)return;if(event.target.closest("textarea,input"))return;
@@ -2592,6 +2667,6 @@ function setupDock() {
     menu.hidden=false;Object.assign(menu.style,{left:Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+"px",top:Math.max(8,Math.min(event.clientY,innerHeight-menu.offsetHeight-8))+"px"});action.focus();
   });
   document.addEventListener("pointerdown",event=>{if(!menu.contains(event.target))menu.hidden=true;});
-  document.addEventListener("keydown",event=>{if(event.key==="Escape"){pendingDock=null;hide();}});
+  document.addEventListener("keydown",event=>{if(event.key==="Escape")stopPointer();});
   applyDockLayout();
 }

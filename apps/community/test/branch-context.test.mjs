@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startCommunity } from "../server.mjs";
 
-async function fixture(t) {
+async function fixture(t, complete) {
   const dir = await mkdtemp(join(tmpdir(), "branch-context-")), calls = [];
   const app = await startCommunity({ dataDir: dir, port: 0, env: { COMMUNITY_BOOTSTRAP_TOKEN: "bootstrap" }, llm: {
-    complete: async request => { calls.push(request); return 'SendMessage: '+JSON.stringify({content: request.isolation?.botId === "compact" ? "COMPACTED_DECISION" : "완료"}); },
+    complete: async (request,signal) => { calls.push(request); return complete ? complete(request,signal) : 'SendMessage: '+JSON.stringify({content: request.isolation?.botId === "compact" ? "COMPACTED_DECISION" : "완료"}); },
   } });
   t.after(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
   async function call(path, auth, body, csrf = true) {
@@ -69,6 +69,54 @@ test("merge snapshots effective reset/compacted contexts without an AI call or m
   assert.match(f.saved(child).summary,/COMPACTED_DECISION/);
   assert.equal((await f.call(`/api/rooms/${child}/context-reset`,owner,{})).status,200);
   assert.doesNotMatch((await f.bot(owner,child,"EMPTY_NEW_CONTEXT")).user,/LEFT_CURRENT|RIGHT_CURRENT|COMPACTED_DECISION/);
+});
+
+test("independent accessible sessions merge into a new context while originals and membership stay unchanged", async t => {
+  const f=await fixture(t),admin=await f.register("independent_admin"),member=await f.register("independent_member",admin);
+  const first=await f.room(admin),second=await f.room(member),hidden=await f.room(admin);
+  const invite=(await f.call(`/api/rooms/${first}/invites`,admin,{})).data.token;
+  assert.equal((await f.call("/api/rooms/join",member,{token:invite})).status,200);
+  await f.send(member,first,"TRAVEL_PLAN_IN_FIRST_SESSION");
+  await f.send(member,second,"PROJECT_PLAN_IN_SECOND_SESSION");
+  const firstBefore=(await f.call(`/api/rooms/${first}`,member)).data,secondBefore=(await f.call(`/api/rooms/${second}`,member)).data;
+  assert.equal((await f.call(`/api/rooms/${first}/merge`,member,{sourceId:hidden})).status,404,"source membership is required");
+  assert.equal((await f.call(`/api/rooms/${hidden}/merge`,member,{sourceId:second})).status,404,"target membership is required");
+  assert.equal((await f.call(`/api/rooms/${first}/merge`,admin,{sourceId:second})).status,404,"admin role does not bypass source membership");
+  const callCount=f.calls.length,merged=await f.merge(member,first,second),id=merged.room.id;
+  assert.notEqual(id,first);assert.notEqual(id,second);
+  assert.equal(f.calls.length,callCount,"combining snapshots must not trigger a model request");
+  assert.deepEqual((await f.call(`/api/rooms/${first}`,member)).data,firstBefore);
+  assert.deepEqual((await f.call(`/api/rooms/${second}`,member)).data,secondBefore);
+  assert.equal((await f.call(`/api/rooms/${id}`,admin)).status,404,"the new room does not inherit other participants");
+  const link=(await f.call("/api/rooms",member)).data.forks.find(value=>value.id===id);
+  assert.deepEqual(link.parents,[first,second]);assert.equal(link.operation,"merge");
+  const messages=(await f.call(`/api/rooms/${id}`,member)).data.messages;
+  assert.ok(messages.some(message=>message.text==="TRAVEL_PLAN_IN_FIRST_SESSION"));
+  assert.ok(messages.some(message=>message.text==="PROJECT_PLAN_IN_SECOND_SESSION"));
+  const request=await f.bot(member,id,"COMBINE_BOTH_PLANS");
+  assert.match(request.user,/TRAVEL_PLAN_IN_FIRST_SESSION/);
+  assert.match(request.user,/PROJECT_PLAN_IN_SECOND_SESSION/);
+  assert.equal((await f.call(`/api/rooms/${first}/merge`,admin,{sourceId:first})).status,400);
+  const monitor="00000000-0000-4000-8000-000000000001";
+  f.db.prepare("INSERT INTO rooms VALUES(?,?,?,?,?)").run(monitor,"dashboard","",admin.id,Date.now());
+  f.db.prepare("INSERT INTO room_members VALUES(?,?,?)").run(monitor,admin.id,"owner");
+  assert.equal((await f.call(`/api/rooms/${first}/merge`,admin,{sourceId:monitor})).status,400);
+  assert.equal((await f.call(`/api/rooms/${monitor}/merge`,admin,{sourceId:first})).status,400);
+});
+
+test("independent merges still wait for running or queued work in either session", async t => {
+  const completion=Promise.withResolvers(),f=await fixture(t,()=>completion.promise),owner=await f.register("busy_merge_owner");
+  const running=await f.room(owner),otherRunning=await f.room(owner),queued=await f.room(owner),idle=await f.room(owner);
+  try {
+    await f.send(owner,running,"RUNNING_FIRST",{botIds:["bot-analyst"]});
+    await f.send(owner,otherRunning,"RUNNING_SECOND",{botIds:["bot-analyst"]});
+    const waiting=await f.call(`/api/rooms/${queued}/messages`,owner,{text:"WAITING_ONLY",botIds:["bot-analyst"],clientNonce:randomUUID(),queueIfBusy:true});
+    assert.equal(waiting.status,202);assert.equal(waiting.data.queued,true);
+    assert.equal((await f.call(`/api/rooms/${idle}/merge`,owner,{sourceId:running})).status,409);
+    assert.equal((await f.call(`/api/rooms/${running}/merge`,owner,{sourceId:idle})).status,409);
+    assert.equal((await f.call(`/api/rooms/${idle}/merge`,owner,{sourceId:queued})).status,409);
+    assert.equal((await f.call(`/api/rooms/${queued}/merge`,owner,{sourceId:idle})).status,409);
+  } finally { completion.resolve('SendMessage: '+JSON.stringify({content:"완료"})); }
 });
 
 test("merge attachment snapshots keep only effective images and preserve mail privacy for nonadmin owners", async t => {
@@ -139,10 +187,11 @@ test("deep descendants and two-parent merges stay related; inaccessible parent I
   await f.merge(member,merged,branch);
   f.db.prepare("DELETE FROM room_members WHERE room_id=? AND user_id=?").run(sibling,member.id);
   assert.equal(JSON.stringify((await f.call("/api/rooms",member)).data.forks).includes(sibling),false,"secondary merge parents must also be hidden");
-  // Corrupt cyclic lineage cannot hang traversal or make an unrelated branch related.
+  // Corrupt cyclic lineage cannot prevent merging two accessible conversations.
   f.db.prepare("UPDATE settings SET value=? WHERE key=?").run(JSON.stringify({parents:[deep]}),"lineage:"+branch);
   const unrelated=await f.room(member);
-  assert.equal((await f.call(`/api/rooms/${deep}/merge`,member,{sourceId:unrelated})).status,400);
+  const independentMerge=await f.merge(member,deep,unrelated);
+  assert.notEqual(independentMerge.room.id,deep);
 });
 
 test("historical fork of an interleaved merge excludes later messages from either parent", async t => {
@@ -162,10 +211,10 @@ test("historical fork of an interleaved merge excludes later messages from eithe
   assert.doesNotMatch((await f.bot(owner,child.room.id,"CONTINUE_EARLIER_BRANCH")).user,/LEFT_T5_EXCLUDED/);
 });
 
-test("personal admin branch merges retain the private invite boundary", async t => {
+test("personal admin sessions merged with independent sessions retain the private invite boundary", async t => {
   const f=await fixture(t),owner=await f.register("personal_merge"),other=await f.register("personal_other",owner);
   const root=(await f.call("/api/rooms",owner)).data.rooms.find(room=>room.personal).id;
-  const branch=await f.fork(owner,root),merged=(await f.merge(owner,root,branch)).room;
+  const branch=await f.room(owner),merged=(await f.merge(owner,root,branch)).room;
   assert.equal(merged.personal,true);
   assert.equal(merged.sharing.canInvite,false);
   assert.equal((await f.call(`/api/rooms/${merged.id}/invites`,owner,{})).status,403);

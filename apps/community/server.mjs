@@ -472,21 +472,6 @@ export async function startCommunity(options = {}) {
       throughMessageId: visibleIds.has(link.parent) ? link.throughMessageId : null,
     }));
   }
-  function relatedBranches(first, second) {
-    const graph = new Map(forkLinks().map(link => [link.id, link.parents]));
-    const ancestors = (id) => {
-      const seen = new Set(), pending = [id];
-      while (pending.length) {
-        const next = pending.pop();
-        if (seen.has(next)) continue;
-        seen.add(next);
-        for (const parent of graph.get(next) || []) if (!seen.has(parent)) pending.push(parent);
-      }
-      return seen;
-    };
-    const mine = ancestors(first);
-    return [...ancestors(second)].some(id => mine.has(id));
-  }
   function mergedContext(first, second) {
     const contexts = [contextFor(first).text, contextFor(second).text];
     // Share a fixed budget fairly; never run an AI or replay tools to merge.
@@ -1805,7 +1790,6 @@ export async function startCommunity(options = {}) {
         if (sourceId === room.id) throw failure(400, "같은 가지는 합칠 수 없습니다.");
         const source = roomFor(sourceId, user);
         if (room.id === MONITOR_ROOM || source.id === MONITOR_ROOM) throw failure(400, "대시보드는 합칠 수 없습니다.");
-        if (!relatedBranches(room.id, source.id)) throw failure(400, "같은 줄기에서 갈라진 대화만 합칠 수 있습니다.");
         if (roomJobs.has(room.id) || roomJobs.has(source.id) || messageQueue.has(room.id) || messageQueue.has(source.id)) throw failure(409, "진행 중이거나 대기 중인 메시지가 처리된 뒤 합쳐 주세요.");
         const snapshot = mergedContext(room.id, source.id);
         const activeImages = [...contextImages(room.id), ...contextImages(source.id)].sort((a, b) => b.created_at - a.created_at);
