@@ -15,6 +15,7 @@ import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
 import { createMessageQueue } from "/message-queue.js";
+import { pasteComposerImages, uploadAttachmentFiles, clearAttachmentDraft, removeAttachmentDraft } from "/composer-attachments.mjs";
 import { suggestTopicSwitch } from "/topic-switch.mjs";
 const inviteLinks = createInviteLinks();
 
@@ -242,6 +243,7 @@ function showAuth() {
   state.sending = false;
   $("#message-input").disabled=false;$("#send-button").disabled=false;
   state.layout = 1;
+  state.extra.forEach(pane => clearAttachmentDraft(pane));
   state.extra = [];
   state.focusPane = 0;
   state.models = [];
@@ -517,6 +519,7 @@ async function updateRoomListPreference(room, changes) {
       if(next) await selectRoom(next.id); else showEmpty();
     }
     if(prefs.archived) {
+      state.extra.filter(pane => pane.roomId === room.id).forEach(pane => clearAttachmentDraft(pane));
       state.extra=state.extra.filter(p=>p.roomId!==room.id);
       renderExtraPanes();
     }
@@ -603,6 +606,7 @@ function renderRooms() {
   if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
 }
 function showEmpty() {
+  clearPendingAttachments();
   state.selectedRoom = null;
   state.roomData = null;
   desktopUI?.setRoom(null);
@@ -619,7 +623,7 @@ async function selectRoom(id) {
   const previous = state.selectedRoom;
   if(previous!==id && !matchMedia("(prefers-reduced-motion: reduce)").matches) els.roomView.animate([{opacity:.35,transform:"translateY(7px)"},{opacity:1,transform:"translateY(0)"}],{duration:320,easing:"cubic-bezier(.2,.8,.2,1)"});
   state.extra.forEach((pane) => {
-    if (pane.roomId === id) pane.roomId = previous && previous !== id ? previous : null;
+    if (pane.roomId === id) { clearAttachmentDraft(pane); pane.roomId = previous && previous !== id ? previous : null; }
   });
   state.selectedRoom = id;
   $("#message-input").disabled=state.sending;
@@ -1099,22 +1103,22 @@ function updateBotLabel() {
   $("#bot-picker-label").hidden = true;
 }
 
-function clearPendingAttachments() {
-  state.attachmentGeneration += 1;
-  state.pendingAttachments.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
-  state.pendingAttachments = [];
-  renderPendingAttachments();
+function clearPendingAttachments(pane = null) {
+  clearAttachmentDraft(pane || state);
+  renderPendingAttachments(pane);
 }
 function cancelActiveRecording() {
   if (!state.recording) return;
   state.recordingCancelled = true;
   try { state.recording.stop(); } catch {}
 }
-function renderPendingAttachments() {
-  const list = $("#attachment-list");
+function renderPendingAttachments(pane = null) {
+  const owner = pane || state;
+  const section = pane ? $$(".extra-pane")[state.extra.indexOf(pane)] : null;
+  const list = pane ? section && $(".attachment-list", section) : $("#attachment-list");
   if (!list) return;
   list.replaceChildren();
-  state.pendingAttachments.forEach((item) => {
+  (owner.pendingAttachments || []).forEach((item) => {
     const card = document.createElement("div");
     card.className = `attachment-card${item.error ? " is-error" : ""}`;
     if (item.kind === "image" && item.previewUrl) {
@@ -1136,60 +1140,37 @@ function renderPendingAttachments() {
     remove.type = "button";
     remove.className = "attachment-remove";
     remove.setAttribute("aria-label", `${item.name} 첨부 제거`);
+    remove.disabled = !!owner.sending;
     remove.append(icon("close"));
     remove.addEventListener("click", () => {
-      const index = state.pendingAttachments.indexOf(item);
-      if (index < 0) return;
-      state.pendingAttachments.splice(index, 1);
-      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      renderPendingAttachments();
+      if (owner.sending) return;
+      removeAttachmentDraft(owner, item);
+      renderPendingAttachments(pane);
     });
     card.append(remove);
     list.append(card);
   });
 }
-async function uploadAttachments(files) {
-  const roomId = state.selectedRoom;
-  const generation = state.attachmentGeneration;
-  const accepted = [...files].filter((file) => /^(image|audio)\//.test(file.type));
-  if (accepted.length !== files.length) toast("사진 또는 음성 파일만 첨부할 수 있어요.");
-  if (state.pendingAttachments.length + accepted.length > 4) {
-    toast("메시지 하나에 최대 4개까지 첨부할 수 있어요.");
-    return;
-  }
-  for (const file of accepted) {
-    if (file.size > 12 * 1024 * 1024) {
-      toast(`${file.name}: 파일은 12MB 이하만 첨부할 수 있어요.`);
-      continue;
-    }
-    const item = {
-      roomId,
-      name: file.name,
-      kind: file.type.startsWith("image/") ? "image" : "audio",
-      previewUrl: URL.createObjectURL(file),
-      uploading: true,
-      attachment: null,
-    };
-    state.pendingAttachments.push(item);
-    renderPendingAttachments();
-    const form = new FormData();
-    form.append("file", file, file.name);
-    try {
-      const data = await api(`/api/rooms/${encodeURIComponent(roomId)}/attachments`, {
-        method: "POST",
-        body: form,
-      });
-      if (state.selectedRoom !== roomId || state.attachmentGeneration !== generation) return;
-      item.attachment = data.attachment;
-      item.uploading = false;
-      item.name = data.attachment?.name || item.name;
-    } catch (error) {
-      if (state.selectedRoom !== roomId || state.attachmentGeneration !== generation) return;
-      item.uploading = false;
-      item.error = error.message || "업로드하지 못했습니다.";
-    }
-    renderPendingAttachments();
-  }
+async function uploadAttachments(files, pane = null) {
+  if (composerBlocked(pane)) return;
+  const owner = pane || state;
+  const roomId = pane ? pane.roomId : state.selectedRoom;
+  const userId = state.session?.user?.id;
+  return uploadAttachmentFiles({
+    files, owner, roomId,
+    isCurrent: () => !!userId && state.session?.user?.id === userId &&
+      (pane ? state.extra.includes(pane) && pane.roomId === roomId : state.selectedRoom === roomId),
+    changed: () => renderPendingAttachments(pane),
+    notify: toast,
+    upload: (file, name, signal) => {
+      const form = new FormData();
+      form.append("file", file, name);
+      return api(`/api/rooms/${encodeURIComponent(roomId)}/attachments`, { method: "POST", body: form, signal });
+    },
+  });
+}
+function pasteAttachments(event, pane = null) {
+  pasteComposerImages(event, { enabled: !composerBlocked(pane), upload: files => uploadAttachments(files, pane) });
 }
 async function toggleRecording() {
   if (voiceUI?.roomId) { toast("통화가 끝난 뒤 녹음을 첨부할 수 있어요."); return; }
@@ -1343,13 +1324,15 @@ async function submitMessage(event, skipTopic = false) {
   const input = $("#message-input"),
     text = input.value.trim();
   const attachments = state.pendingAttachments.filter((item) => item.attachment && !item.error);
-  if (!text && !attachments.length) return;
+  const attachmentGeneration = state.attachmentGeneration;
   const roomId = state.selectedRoom,
     botIds = [...state.selectedBots];
   if (state.pendingAttachments.some((item) => item.uploading)) {
     toast("첨부 파일 업로드가 끝날 때까지 기다려주세요.");
     return;
   }
+  if (state.pendingAttachments.some(item => item.error)) { toast("업로드하지 못한 첨부 파일을 제거한 뒤 다시 첨부해 주세요."); return; }
+  if (!text && !attachments.length) return;
   if(topicPrompts.has(roomId))return;
   if(!skipTopic && !attachments.length && await offerTopicChoice(null,text))return;
   if(state.selectedRoom!==roomId || composerBlocked())return;
@@ -1389,7 +1372,7 @@ async function submitMessage(event, skipTopic = false) {
     if(result.queued)paintPending(roomId);
     if (Array.isArray(result.models)) applyModels(result.models);
     state.pendingSend = null;
-    if(state.selectedRoom===roomId)clearPendingAttachments();
+    if(state.selectedRoom===roomId && state.attachmentGeneration===attachmentGeneration)clearPendingAttachments();
     await refreshRoom(true);
     await loadRooms();
   } catch (error) {
@@ -1894,6 +1877,7 @@ function openModelBrowser(select,trigger) {
 }
 function setLayout(count) {
   if (!state.selectedRoom || count < 2 || count > 8) return;
+  state.extra.forEach(pane => clearAttachmentDraft(pane));
   if (state.layout === count) {
     state.layout = 1;
     state.extra = [];
@@ -1995,6 +1979,7 @@ function renderExtraPanes() {
     input.rows = 1;
     input.value=pane.draft || "";
     input.addEventListener("input",()=>{pane.draft=input.value;});
+    input.addEventListener("paste", event => pasteAttachments(event, pane));
     input.maxLength = 4000;
     input.placeholder = "메시지 보내기. model 이면 목록을 가져옵니다.";
     input.setAttribute("aria-label", (room?.name || "대화") + " 메시지");
@@ -2010,12 +1995,23 @@ function renderExtraPanes() {
     send.className = "send-button";
     send.setAttribute("aria-label", "메시지 보내기");
     send.append(icon("arrow"));
-    row.append(input, send);
-    form.append(controls, row);
+    const attach = document.createElement("button");
+    attach.type = "button"; attach.className = "bot-picker-button attach-button";
+    attach.setAttribute("aria-label", "사진 또는 음성 첨부"); attach.title = "사진 또는 음성 첨부 · 이미지 붙여넣기도 가능해요";
+    attach.append(icon("attach"));
+    const fileInput = document.createElement("input");
+    fileInput.type = "file"; fileInput.className = "sr-only"; fileInput.accept = "image/png,image/jpeg,image/webp,image/gif,audio/*"; fileInput.multiple = true;
+    attach.onclick = () => { if (!composerBlocked(pane)) fileInput.click(); };
+    fileInput.onchange = () => { void uploadAttachments(fileInput.files, pane); fileInput.value = ""; };
+    row.append(attach, fileInput, input, send);
+    const attachmentList = document.createElement("div");
+    attachmentList.className = "attachment-list"; attachmentList.setAttribute("aria-live", "polite");
+    form.append(controls, row, attachmentList);
     renderContextMeter(pane.data?.context,form,pane);
     messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
     grid.append(section);
+    renderPendingAttachments(pane);
 
   });
   applyModels(state.models);
@@ -2057,20 +2053,25 @@ async function submitPane(event, index, skipTopic = false) {
   const form = event.currentTarget;
   const input = $("textarea", form);
   const text = input.value.trim();
-  if (!text) return;
+  const attachments = (pane.pendingAttachments || []).filter(item => item.attachment && !item.error);
+  if ((pane.pendingAttachments || []).some(item => item.uploading)) { toast("첨부 파일 업로드가 끝날 때까지 기다려주세요."); return; }
+  if ((pane.pendingAttachments || []).some(item => item.error)) { toast("업로드하지 못한 첨부 파일을 제거한 뒤 다시 첨부해 주세요."); return; }
+  if (!text && !attachments.length) return;
+  const attachmentGeneration = pane.attachmentGeneration;
   const roomId=pane.roomId,userId=state.session?.user?.id;
   if(topicPrompts.has(roomId))return;
-  if(!skipTopic && await offerTopicChoice(pane,text))return;
+  if(!skipTopic && !attachments.length && await offerTopicChoice(pane,text))return;
   if(!contextOwnerCurrent(roomId,userId,pane)||composerBlocked(pane))return;
-  const signature=JSON.stringify({roomId,text,model:pane.model,effort:pane.effort});
+  const attachmentIds = attachments.map(item => item.attachment.id);
+  const signature=JSON.stringify({roomId,text,attachmentIds,model:pane.model,effort:pane.effort});
   if(pane.pendingSend?.signature!==signature)pane.pendingSend={signature,nonce:crypto.randomUUID()};
   const nonce=pane.pendingSend.nonce;
-  const payload=JSON.stringify({text,botIds:[...state.selectedBots],attachmentIds:[],clientNonce:nonce,model:$(".model-select",form).value,effort:$(".effort-select",form).value,queueIfBusy:true});
+  const payload=JSON.stringify({text,botIds:[...state.selectedBots],attachmentIds,clientNonce:nonce,model:$(".model-select",form).value,effort:$(".effort-select",form).value,queueIfBusy:true});
   presenceErrors.delete(roomId);
   pane.sending = true;
   updateModelAvailability();
   input.value=""; pane.draft="";input.disabled=true;
-  const pending=pane.data?.busy ? null : await optimisticMessage(roomId,text,nonce);
+  const pending=pane.data?.busy ? null : await optimisticMessage(roomId,text,nonce,attachments.map(item => item.attachment));
   let accepted=false;
   try {
     const result = await api(`/api/rooms/${encodeURIComponent(roomId)}/messages`, {
@@ -2085,7 +2086,8 @@ async function submitPane(event, index, skipTopic = false) {
     if(result.queued)paintPending(roomId);
     pane.pendingSend=null;
     if (Array.isArray(result.models)) applyModels(result.models);
-    await refreshExtra(index);
+    if(contextOwnerCurrent(roomId,userId,pane) && pane.attachmentGeneration===attachmentGeneration)clearPendingAttachments(pane);
+    if(contextOwnerCurrent(roomId,userId,pane))await refreshExtra(state.extra.indexOf(pane));
     await loadRooms();
   } catch (error) {
     if(state.session?.user?.id!==userId)return;
@@ -2154,10 +2156,11 @@ function refreshExtras() {
 }
 function assignExtra(index, roomId) {
   const pane = state.extra[index];
-  if (!pane || roomId === state.selectedRoom) return;
+  if (!pane || roomId === state.selectedRoom || pane.roomId === roomId) return;
   state.extra.forEach((item, itemIndex) => {
-    if (itemIndex !== index && item.roomId === roomId) item.roomId = pane.roomId;
+    if (itemIndex !== index && item.roomId === roomId) { clearAttachmentDraft(item); item.roomId = pane.roomId; }
   });
+  clearAttachmentDraft(pane);
   pane.roomId = roomId;
   pane.data = null;
   pane.busy = false;
@@ -2255,6 +2258,7 @@ function bind() {
     state.recording.stop();
     toast("녹음을 취소했습니다.");
   });
+  $("#message-input").addEventListener("paste", event => pasteAttachments(event));
   $("#message-input").addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey) {
@@ -2381,8 +2385,11 @@ function applyDockLayout() {
 async function closeDockPane(index) {
   if(dockRects.length<2)return;
   if(index===0 ? $("#message-input").value.trim() : state.extra[index-1]?.draft?.trim()) {toast("작성 중인 메시지를 보내거나 비운 뒤 창을 닫아주세요.");return;}
+  if ((index === 0 ? state.pendingAttachments.length || state.extra[0]?.pendingAttachments?.length : state.extra[index-1]?.pendingAttachments?.length)) {
+    toast("첨부 파일을 보내거나 제거한 뒤 창을 닫아주세요."); return;
+  }
   let promote;
-  if(index===0){promote=state.extra.shift();} else state.extra.splice(index-1,1);
+  if(index===0){promote=state.extra.shift();if(promote)clearAttachmentDraft(promote);} else {clearAttachmentDraft(state.extra[index-1]);state.extra.splice(index-1,1);}
   const count=state.extra.length+1;
   dockRects=Array.from({length:count},(_,i)=>({x:i/count,y:0,w:1/count,h:1}));
   state.layout=count;state.focusPane=0;$("#pane-grid").dataset.panes=String(count);

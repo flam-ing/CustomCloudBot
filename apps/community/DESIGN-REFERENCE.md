@@ -1,5 +1,11 @@
 # UI reference — 2026-09-20
 
+## Current theme — 2026-10-15
+
+The operator requested a brighter glassmorphism design. `public/glass.css` loads after the component styles and applies a light lavender canvas, translucent panels, plum text and restrained rose accents. The original layout, compact mascot and conversation controls remain. Blur is limited to the main surfaces and floating panels; opaque fallbacks preserve legibility when backdrop filtering is unavailable or reduced transparency is requested. Terminal content retains its own contrast-oriented palette.
+
+The notes below describe the earlier layout reference, not the current color palette.
+
 The initial Bot Lounge branding, navy/blue palette, large room heading, promotional login panel and decorative copy were removed at the user's request. The UI now follows the neutral dark desktop chat layout documented by the public Grok Bot 0.18 reconstruction.
 
 ## Evidence used

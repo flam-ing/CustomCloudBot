@@ -1,0 +1,335 @@
+/* Lavender glass theme. Load after the component styles. Geometry and character
+   sizes stay with their components; this file owns color, depth and surfaces. */
+:root {
+  color-scheme: light;
+  --bg: #f4f2fa;
+  --sidebar: rgba(255, 255, 255, .62);
+  --surface: rgba(255, 255, 255, .74);
+  --text: #302a43;
+  --muted: #686078;
+  --dim: #756d83;
+  --text-secondary: var(--muted);
+  --line: rgba(105, 80, 145, .15);
+  --hover: rgba(126, 96, 180, .08);
+  --selected: rgba(132, 101, 193, .14);
+  --bot-bubble: rgba(255, 255, 255, .76);
+  --own-bubble: rgba(224, 215, 248, .72);
+  --brand-magenta: #ba397c;
+  --brand-indigo: #7653b5;
+  --glass-accent: #7956b5;
+  --glass-accent-strong: #654296;
+  --glass-field: rgba(255, 255, 255, .68);
+  --glass-panel: rgba(251, 249, 255, .94);
+  --glass-shadow: 0 12px 40px rgba(76, 52, 111, .09), inset 0 1px 0 #fff;
+  --glass-popover-shadow: 0 18px 64px rgba(67, 44, 103, .16), 0 2px 10px rgba(67, 44, 103, .05), inset 0 1px 0 #fff;
+  --glass-backdrop: blur(22px) saturate(135%);
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  background:
+    radial-gradient(ellipse at 6% 4%, #dfd6f6 0, transparent 43%),
+    radial-gradient(ellipse at 95% 13%, #f7e2ee 0, transparent 38%),
+    radial-gradient(ellipse at 73% 100%, #e3e8fa 0, transparent 48%),
+    var(--bg);
+}
+
+::selection { background: #d9c8f4; color: #38234f; }
+button, input, textarea, select { accent-color: var(--glass-accent); }
+select, option { color-scheme: light; }
+select option { background: #faf8ff; color: var(--text); }
+button:focus-visible, input:focus-visible, textarea:focus-visible,
+select:focus-visible, a:focus-visible {
+  outline: 2px solid #9975cb;
+  outline-offset: 3px;
+}
+input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
+:is(.message-list, .room-list, .context-popover, .model-browser, .workspace-file-list) {
+  scrollbar-color: #c9bddb transparent;
+}
+
+.workspace-view, .main-panel, .auth-view { background: transparent; }
+.startup-view { background: var(--bg); }
+.sidebar {
+  background: var(--sidebar);
+  border-color: rgba(255, 255, 255, .75);
+  box-shadow: 6px 0 32px rgba(89, 65, 129, .035);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  backdrop-filter: var(--glass-backdrop);
+}
+.topbar {
+  background: rgba(255, 255, 255, .46);
+  border-bottom-color: rgba(113, 87, 153, .10);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  backdrop-filter: var(--glass-backdrop);
+}
+.sidebar-top, .sidebar-bottom { background: transparent; }
+.app-name { color: #433453; }
+.search-field { background: rgba(255, 255, 255, .52); border-color: var(--line); }
+.search-field:focus-within { border-color: #aa91cc; background: #ffffffb8; }
+.sidebar-command, .room-group-toggle, .room-group-menu, .sidebar-heading button,
+.room-section-label, .room-group-toggle::before, .room-group-toggle > small,
+.room-group-empty, .deleted-rooms-toggle, .branch-current, .branch-reset,
+.branch-row-copy small, .branch-restore { color: var(--muted); }
+.sidebar-heading button:hover:not(:disabled), .room-group-toggle:hover,
+.room-group-menu:hover, .profile-customize:hover, .profile-customize:focus-visible {
+  color: var(--glass-accent-strong); background: var(--hover);
+}
+.room-item.is-active { box-shadow: inset 0 0 0 1px #8b68bb18; }
+.branch-color-0 { --branch-color: #9470c7; }
+.branch-color-1 { --branch-color: #bc719b; }
+.branch-color-2 { --branch-color: #558f95; }
+.branch-path { opacity: .55; }
+.branch-node { fill: #f5f0fd; }
+.branch-row:hover { background: #8260b40a; }
+.branch-row.is-selected { background: #b799e226; box-shadow: inset 0 0 0 1px #a985d218; }
+.branch-row.is-selected .branch-row-copy strong { color: #694792; font-weight: 600; }
+.branch-row.is-ancestor .branch-row-copy { opacity: .72; }
+.branch-heading #branch-fork { color: var(--glass-accent-strong); background: #b69adf24; }
+.branch-heading #branch-fork:hover:not(:disabled) { background: #b69adf38; }
+.branch-list-footer { border-color: var(--line); }
+.branch-reset:hover { color: var(--brand-magenta); }
+.sidebar-resizer::after { background: #ac8ccc80; }
+.sidebar-resizer:hover::before, .sidebar-resizer:focus-visible::before,
+.sidebar-resizing .sidebar-resizer::before { background: #ac8ccc80; }
+
+.avatar { background: #e0d7ed; color: #655171; }
+#profile-avatar { background: #6f658e; color: #fff; }
+.message .avatar { background: #e6deef; color: #6b5a7a; }
+.header-avatar { background: #b79bdf1c; color: var(--glass-accent); }
+.avatar-bot, .message .avatar-bot, .room-icon { background: transparent; color: var(--glass-accent); }
+.message-body > p, .message-copy {
+  border: 1px solid rgba(255, 255, 255, .9);
+  box-shadow: 0 3px 16px rgba(93, 72, 124, .035);
+}
+.message-own .message-body > p { border-color: #d2bee941; }
+.message-system .message-body p { border-color: transparent; box-shadow: none; }
+.message-copy a { color: var(--glass-accent-strong); }
+.message-copy :not(pre) > code { background: #9176b414; color: #714f8f; }
+.message-actions button { color: var(--muted); }
+.message-actions button:hover, .message-actions button:focus-visible {
+  color: var(--glass-accent-strong); background: #a788cd20;
+}
+.think-bubble { border: 1px solid #ffffffbd; }
+.code-block { background: #f5f1fb; border-color: #ac91ca27; }
+.code-header { color: var(--muted); border-color: var(--line); background: #e9e1f736; }
+.code-header button { color: var(--glass-accent-strong); }
+.code-header button:hover { background: var(--hover); }
+.model-status { color: #397762; }
+
+.composer {
+  background: rgba(255, 255, 255, .75);
+  border-color: rgba(255, 255, 255, .95);
+  box-shadow: var(--glass-shadow), 0 0 0 1px #9a7bbc0d;
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  backdrop-filter: var(--glass-backdrop);
+}
+.composer:focus-within {
+  border-color: #c6aedf;
+  box-shadow: var(--glass-shadow), 0 0 0 3px #b59ad410;
+}
+.bot-picker-button { color: var(--glass-accent-strong); background: #a58ac51c; }
+.bot-picker-button:hover, .bot-picker-button[aria-expanded="true"] { background: #a58ac535; }
+.send-button { background: #8a65be; color: #fff; box-shadow: 0 3px 10px #8058b32b; }
+.send-button:hover { background: #7650a9; }
+.primary-button { color: #fff; background: #8761b9; }
+.primary-button:hover { background: #744ba7; }
+.outline-button { color: var(--text); background: #ffffff6b; border-color: var(--line); }
+.outline-button:hover { background: #ebdffb80; }
+.attachment-card { background: #f4eefc; border-color: #cdb6e54d; color: var(--muted); }
+.message-queue-item { background: #b99cdb13; }
+.message-queue-steering { color: var(--glass-accent-strong); }
+.message-queue-actions button { background: #ffffff94; border-color: #b99bdb3a; color: var(--glass-accent-strong); }
+.message-queue-actions button:hover { background: #e7daf8; border-color: #b99bdb6e; }
+.message-queue-actions .message-queue-cancel { background: transparent; color: var(--muted); }
+.model-controls label, .model-more, .picker-eyebrow, .model-count, .model-card span,
+.quick-model-picker h2, .quick-model-more { color: var(--muted); }
+.model-controls select, .model-trigger {
+  background: #ffffff85; color: var(--text); border-color: #ae91d035;
+}
+.model-trigger:hover { background: #f4ecfc; }
+.model-more:hover { background: var(--hover); color: var(--glass-accent-strong); }
+.model-card { background: #ffffff61; border-color: var(--line); }
+.model-card:hover { background: #fff; border-color: #b79bdb; }
+.model-card[aria-pressed="true"] { background: #e4d6f647; border-color: #a986d5; }
+.model-card small { color: var(--glass-accent-strong); }
+.model-load-more { background: #e5d9f544; color: var(--glass-accent-strong); }
+.quick-model-option, .quick-model-more { color: var(--text); }
+.quick-model-option:hover, .quick-model-option:focus-visible, .quick-model-more:hover { background: var(--hover); }
+.quick-model-option[aria-pressed="true"] { background: var(--selected); color: var(--glass-accent-strong); }
+.model-browser-close { background: #a788cd12; color: var(--muted); }
+
+/* Opaque enough to read above the transcript, with a frosted edge. */
+.modal, .model-browser, .quick-model-picker, .model-change-dialog,
+.sidebar-dialog, .profile-settings-dialog, .room-sharing-dialog,
+.routines-dialog, .voice-call-dialog, .setup-dialog, .mail-dialog,
+.capability-hub, .context-popover, .notification-panel, .dock-menu,
+.bot-picker, .image-dialog, .member-panel, .toast, .workspace-popup {
+  background: var(--glass-panel);
+  color: var(--text);
+  border-color: #ffffffd9;
+  box-shadow: var(--glass-popover-shadow);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  backdrop-filter: var(--glass-backdrop);
+}
+dialog::backdrop,
+:is(.modal, .model-browser, .quick-model-picker, .model-change-dialog,
+  .sidebar-dialog, .profile-settings-dialog, .room-sharing-dialog,
+  .routines-dialog, .voice-call-dialog, .setup-dialog, .mail-dialog,
+  .capability-hub, .image-dialog)::backdrop, .sidebar-scrim.is-visible {
+  background: rgba(75, 55, 104, .18);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+}
+.context-popover::backdrop { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.auth-panel {
+  width: min(392px, 100%);
+  padding: 30px 32px;
+  border: 1px solid #fffffff2;
+  border-radius: 26px;
+  background: #ffffff8c;
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  backdrop-filter: var(--glass-backdrop);
+}
+.auth-tabs .tab-button.is-active { color: var(--glass-accent-strong); border-bottom-color: var(--glass-accent); }
+.auth-form input, .modal input, .modal textarea, .model-search,
+.sidebar-dialog input, .branch-merge-dialog select, .profile-settings-field input,
+.room-sharing-field input, .routine-field input, .routine-field textarea,
+.routine-field select, .setup-field input, .setup-field select,
+.mail-field input, .mail-field textarea, .mail-agent-sender input,
+.mail-agent-sender select, .context-provider-select, .workspace-address {
+  background: var(--glass-field); color: var(--text); border-color: #b59dcc4d;
+  color-scheme: light;
+}
+.auth-form input:focus, .modal input:focus, .modal textarea:focus { border-color: #a58ac5; }
+.routine-field select option, .context-provider-select option,
+.branch-merge-dialog select option { background: #faf8ff; color: var(--text); }
+.token-box { background: #ffffff75; }
+.dock-menu button { color: var(--text); }
+.dock-menu button:hover, .dock-menu button:focus { background: var(--hover); }
+.dock-preview { background: #b79bdf4d; border-color: #9d7bc3; color: #59377e; }
+.pane-bar { background: #ffffff48; }
+.pane-close { background: #f9f5fff0; border-color: #b79bdf30; color: var(--muted); }
+.pane-close:hover { background: #e5d8f6; color: var(--text); }
+.pane-grid[data-panes]:not([data-panes="1"]) .room-view.is-focus { outline-color: #b79bdf; }
+.pane-grid.docked > .room-view { background: #f7f4fb66; }
+.topbar .desktop-button { background: #ffffff6e; border-color: #b79bdf20; }
+.topbar .desktop-button:hover, .topbar .desktop-button[aria-expanded="true"] { background: var(--selected); border-color: #b79bdf66; }
+.agent-workspaces button { background: #ffffff73; color: var(--muted); border-color: var(--line); }
+
+.context-controls .context-action, .context-controls .context-trigger,
+.context-popover-close, .context-muted, .context-note, .context-breakdown,
+.context-usage-counts span, .context-quota-row, .context-scope-note, .context-scale { color: var(--muted); }
+.context-popover h3 { color: var(--text); }
+.context-controls .context-action:hover:not(:disabled), .context-controls .context-trigger:hover,
+.context-controls .context-trigger[aria-expanded="true"], .context-popover-close:hover {
+  background: var(--hover); color: var(--glass-accent-strong);
+}
+.context-controls .context-ring { background: conic-gradient(#9b77c8 var(--context, 0%), #c9badc4d 0); }
+.context-popover progress, .host-card progress { background: #cab7df36; accent-color: #a083c9; }
+.context-popover progress::-webkit-progress-bar, .host-card progress::-webkit-progress-bar { background: #cab7df36; }
+.context-popover progress::-webkit-progress-value, .host-card progress::-webkit-progress-value { background: #a083c9; }
+.context-popover progress::-moz-progress-bar, .host-card progress::-moz-progress-bar { background: #a083c9; }
+.context-api-section, .context-quota { border-color: var(--line); }
+.context-compact-button { color: var(--glass-accent-strong); background: #bc9fe322; border-color: #a383ca40; }
+.model-change-name { color: var(--glass-accent-strong); }
+.model-change-actions button { color: var(--text); background: #ffffff7d; border-color: var(--line); }
+.model-change-actions button:first-child { color: #fff; background: #8761b9; }
+.model-change-actions button:last-child { color: var(--muted); background: transparent; }
+.model-change-actions button:hover { filter: none; box-shadow: inset 0 0 0 2px #a283c52b; }
+.host-card, .host-storage { background: #ffffff75; border-color: #ffffffdb; box-shadow: var(--glass-shadow); }
+.host-card strong { color: #69468c; }
+.host-warning { color: #986622; }
+
+.sidebar-dialog label, .sidebar-dialog-note, .branch-merge-preview,
+.room-sharing-copy, .room-sharing-note, .profile-settings-account,
+.routines-description, .routine-room-name, .routine-close, .routine-enabled,
+.routine-prompt, .routine-meta, .routine-field, .routine-weekdays legend,
+.routine-empty, .voice-call-dialog .voice-call-top, .voice-call-dialog .voice-call-time,
+.voice-call-transcript, .voice-call-note { color: var(--muted); }
+.sidebar-dialog button { color: var(--text); background: #a788cd0e; }
+.sidebar-dialog button:hover:not(:disabled) { background: var(--hover); }
+.sidebar-dialog-actions button[type="submit"],
+.branch-merge-dialog .sidebar-dialog-actions button[type="submit"] { background: #8761b9; color: #fff; }
+.sidebar-group-option[aria-pressed="true"] { background: var(--selected); color: var(--glass-accent-strong); }
+.topic-choice-buttons button { background: #ffffff73; color: var(--text); border-color: var(--line); }
+.topic-choice-buttons button:hover, .topic-choice-buttons button:focus-visible { background: #eadef84d; border-color: #b39acb; }
+.topic-choice-buttons span { color: var(--muted); }
+.room-sharing-note, .setup-command, .setup-connection { background: #b99cdb0d; }
+.profile-settings-swatch input:checked + span { outline-color: var(--glass-accent); }
+.routine-button, .voice-call-controls button { background: #ffffff80; color: var(--text); border-color: var(--line); }
+.routine-button:hover, .routine-close:hover { background: var(--hover); }
+.routine-button.routine-primary { color: var(--glass-accent-strong); background: #b99cdb22; border-color: #b99cdb55; }
+.routine-button.routine-primary:hover { background: #b99cdb36; }
+.routine-editor { background: #ffffff6e; border-color: var(--line); }
+.routine-item { border-color: var(--line); }
+.routine-enabled.is-enabled { color: #3b7b68; }
+.routine-delete { color: #ab4c72; }
+.routine-delete-confirm { background: #c9578310; border-color: #c9578327; }
+.routine-status, .setup-status, .setup-connection-state, .setup-link,
+.mail-status, .mail-compose-status, .mail-agent-job-state, .notification-mark-read,
+.voice-call-link { color: var(--glass-accent-strong); }
+.notification-badge { background: #a482d0; color: #fff; border-color: #f7f3fb; }
+.notification-item.is-unread { background: #b99cdb18; }
+.notification-setting-button { background: #ffffff70; }
+.voice-call-controls .voice-start { background: #8761b9; color: #fff; }
+.voice-call-controls .voice-end { background: #b9425a; color: #fff; }
+.voice-call-pill { background: #f1e8fcf0; color: #694792; border-color: #b99cdb55; box-shadow: var(--glass-shadow); }
+.topbar-actions .voice-call-button.is-active { color: #7956b5; background: #b99cdb22; }
+.form-message, .room-sharing-status, .profile-settings-status,
+.message-send-error { color: #aa3b60; }
+.attachment-card.is-error { color: #aa3b60; border-color: #c76b8a; background: #fdf0f4; }
+.record-button.is-recording { color: #ac3a67; background: #ebcedc; }
+
+/* Workspace chrome joins the theme; the remote screen and terminal retain their
+   own colors because they are live content, not app decoration. */
+.desktop-panel { background: var(--glass-panel); }
+.workspace-popup .desktop-head { background: #ffffff73; border-color: var(--line); }
+.workspace-content, .workspace-file-list { background: #faf8ff8f; }
+.workspace-statusbar, .workspace-browser-toolbar, .workspace-files-toolbar,
+.workspace-chrome-toolbar { background: #f0eaf96e; border-color: var(--line); }
+.workspace-tabs, .workspace-file-preview-head { border-color: var(--line); }
+.workspace-button, .workspace-tabs .workspace-button, .desktop-status,
+.desktop-status[data-kind="ready"], .workspace-empty, .workspace-file-path,
+.workspace-file-name, .workspace-file-size, .workspace-file-preview-body,
+.workspace-file-note, .workspace-chrome-label { color: var(--muted); }
+.workspace-button:hover:not(:disabled), .workspace-tabs .workspace-button[aria-selected="true"] {
+  background: var(--selected); color: var(--glass-accent-strong);
+}
+.workspace-file-icon, .workspace-download { color: var(--glass-accent-strong); }
+.desktop-status[data-kind="error"] { color: #aa3b60; }
+.workspace-browser-viewport, .workspace-chrome-viewport { background: #e7e1ee; }
+.workspace-browser-help { background: #faf8fff0; color: var(--muted); border-color: var(--line); }
+
+@media (max-width: 720px) {
+  .sidebar { background: rgba(249, 246, 255, .94); }
+}
+@media (max-width: 420px) {
+  .auth-panel { padding: 26px 22px; }
+}
+
+/* Glass remains legible when blur is unavailable or transparency is reduced. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --sidebar: #f6f1fb; --glass-panel: #fbf9ff; --surface: #fff; }
+  .topbar, .composer, .auth-panel { background: #fbf9ff; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --sidebar: #f6f1fb; --surface: #fff; --glass-panel: #fbf9ff;
+    --bot-bubble: #fff; --own-bubble: #e8def7; --glass-field: #fff;
+    --glass-backdrop: none;
+  }
+  body { background: var(--bg); }
+  .topbar, .composer, .auth-panel, .sidebar { background: #fbf9ff; }
+  dialog::backdrop,
+  :is(.modal, .model-browser, .quick-model-picker, .model-change-dialog,
+    .sidebar-dialog, .profile-settings-dialog, .room-sharing-dialog,
+    .routines-dialog, .voice-call-dialog, .setup-dialog, .mail-dialog,
+    .capability-hub, .image-dialog)::backdrop,
+  .sidebar-scrim.is-visible { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
