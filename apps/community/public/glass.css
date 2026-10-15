@@ -6,8 +6,8 @@
   --sidebar: rgba(255, 255, 255, .20);
   --surface: rgba(255, 255, 255, .32);
   --text: #2e3242;
-  --muted: #606679;
-  --dim: #70778a;
+  --muted: #52586a;
+  --dim: #5a6073;
   --text-secondary: var(--muted);
   --line: rgba(79, 97, 124, .15);
   --hover: rgba(126, 96, 180, .08);
@@ -46,8 +46,8 @@ select, option { color-scheme: light; }
 select option { background: #faf8ff; color: var(--text); }
 button:focus-visible, input:focus-visible, textarea:focus-visible,
 select:focus-visible, a:focus-visible {
-  outline: 2px solid #9975cb;
-  outline-offset: 3px;
+  outline: 2px solid var(--accent, #7956b5);
+  outline-offset: 2px;
 }
 input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 :is(.message-list, .room-list, .context-popover, .model-browser, .workspace-file-list) {

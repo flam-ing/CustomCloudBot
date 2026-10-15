@@ -135,6 +135,8 @@
               id="login-username"
               name="username"
               autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
               required
               maxlength="40"
             />
@@ -163,6 +165,8 @@
               id="register-username"
               name="username"
               autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
               required
               maxlength="40"
               placeholder="영문, 숫자, 밑줄 3자 이상"
@@ -182,6 +186,8 @@
               id="register-token"
               name="inviteToken"
               autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
               required
             />
             <button class="primary-button full" type="submit">
@@ -553,6 +559,7 @@
           name="token"
           required
           autocomplete="off"
+          autocapitalize="none"
           spellcheck="false"
         />
         <p id="join-form-message" class="form-message" role="status"></p>
@@ -588,14 +595,14 @@
         </div>
       </form>
     </dialog>
-    <dialog id="pwa-dialog" class="modal">
+    <dialog id="pwa-dialog" class="modal" aria-labelledby="pwa-dialog-title">
       <form method="dialog">
         <div class="modal-head">
           <h2 id="pwa-dialog-title">앱 설치 및 알림</h2>
           <button class="icon-button modal-close" type="submit" aria-label="닫기">×</button>
         </div>
         <p id="pwa-dialog-message" class="modal-copy"></p>
-        <div class="modal-actions"><button class="primary-button" type="submit">확인</button></div>
+        <div class="modal-actions"><button class="primary-button" type="submit" autofocus>확인</button></div>
       </form>
     </dialog>
     <div id="toast" class="toast" popover="manual" role="status" aria-live="polite"></div>
