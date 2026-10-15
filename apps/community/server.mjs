@@ -1113,6 +1113,7 @@ export async function startCommunity(options = {}) {
           "/composer.css": ["composer.css", "text/css"],
           "/dashboard.css": ["dashboard.css", "text/css"],
           "/composer-attachments.mjs": ["composer-attachments.mjs", "text/javascript"],
+          "/composer-ui.mjs": ["composer-ui.mjs", "text/javascript"],
           "/desktop-screen.js": ["desktop-screen.js", "text/javascript"],
           "/desktop.js": ["desktop.js", "text/javascript"],
           "/desktop.css": ["desktop.css", "text/css"],

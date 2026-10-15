@@ -146,13 +146,6 @@
 .dock-menu.nav-menu.is-sheet .nav-menu-item { min-height: 50px; padding: 0 14px; border-radius: 14px; font-size: var(--fs-lg, 16px); }
 @keyframes nav-sheet-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
-.nav-confirm-dialog h2 { margin-bottom: var(--space-3, 12px); }
-.nav-confirm-name { margin: 0; font-size: var(--fs-md, 14px); font-weight: var(--fw-semibold, 600); overflow-wrap: anywhere; }
-.nav-confirm-dialog .sidebar-dialog-note { margin: 6px 0 0; font-size: var(--fs-sm, 13px); line-height: 1.6; color: var(--muted, #606679); word-break: keep-all; }
-.nav-confirm-dialog .sidebar-dialog-actions button { min-height: 40px; padding: 0 16px; border-radius: var(--radius-md, 12px); font-size: var(--fs-sm, 13px); }
-.nav-confirm-dialog .sidebar-dialog-actions .is-danger { background: var(--danger, #b9425a); color: var(--on-accent, #fff); }
-.nav-confirm-dialog .sidebar-dialog-actions .is-danger:hover:not(:disabled) { background: #a5384f; }
-
 /* ---- Account ------------------------------------------------------------- */
 .profile-copy strong { font-size: var(--fs-md, 14px); font-weight: var(--fw-medium, 500); }
 .profile-copy span { font-size: var(--fs-xs, 12px); color: var(--muted, #606679); }
