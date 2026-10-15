@@ -26,6 +26,14 @@ class BrowserProcessTests(unittest.TestCase):
                 self.assertEqual(bridge.browser_on_main_display(23), expected)
 
 
+    def test_chrome_compacted_process_title_uses_first_display_flag(self):
+        import io
+        from unittest.mock import patch
+        for command, expected in [(b'/opt/google/chrome/chrome --display=:99 --user-data-dir=private', True), (b'/opt/google/chrome/chrome --display=:100 --user-data-dir=private', False), (b'/opt/google/chrome/chrome --display=:990', False), (b'/opt/google/chrome/chrome https://example.test/ --display=:99', False)]:
+            with patch.object(bridge.os, 'readlink', return_value='/opt/google/chrome/chrome'), patch('builtins.open', side_effect=lambda path, mode: io.BytesIO(b'' if path.endswith('/environ') else command+b'\0')):
+                self.assertEqual(bridge.browser_on_main_display(23), expected)
+
+
 class Accessible:
     def __init__(self, states=(), children=(), bounds=(10, 20, 100, 30), pid=42):
         self.states, self.children, self.bounds, self.pid = set(states), list(children), bounds, pid

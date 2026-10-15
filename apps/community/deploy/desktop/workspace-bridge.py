@@ -45,7 +45,11 @@ def browser_on_main_display(pid):
         # argument remains readable and still restricts us to the browser view.
         with open(f"/proc/{pid}/cmdline", "rb") as source:
             arguments = source.read(65536).split(b"\0")
-        return b"--display=:99" in arguments or b"--display=:99.0" in arguments
+        if b"--display=:99" in arguments or b"--display=:99.0" in arguments:
+            return True
+        # Chrome's process-title rewrite can also flatten argv into one string.
+        # The entrypoint puts --display first; match that exact prefix only.
+        return bool(re.match(rb"^\S+/chrome --display=:99(?:\.0)?(?: |$)", arguments[0]))
     except (ValueError, TypeError, OSError):
         return False
 
@@ -68,10 +72,9 @@ def collect_input_regions(desktop, atspi, browser_process=browser_on_main_displa
             app = desktop[index]
             if not browser_process(app.get_process_id()):
                 continue
-            # Avoid stale native state after a tab switch without registering a
-            # screen-reader event listener or collecting the page's text cache.
-            if hasattr(app, "setCacheMask"):
-                app.setCacheMask(atspi.cache.NONE)
+            # Keep libatspi's normal cache: disabling it stalls Chrome's native
+            # childCount query on Bookworm. The worker drains events and clears
+            # cached objects before each snapshot to refresh state and geometry.
             for position in range(min(app.childCount, 64)):
                 window = app[position]
                 state = window.getState()
@@ -105,8 +108,9 @@ def collect_input_regions(desktop, atspi, browser_process=browser_on_main_displa
                 # The editable's text descendants add no independently editable area.
                 continue
             remaining = MAX_ACCESSIBLE_NODES - len(seen) - len(stack)
-            children = min(node.childCount, max(remaining, 0))
-            if children < node.childCount:
+            child_count = node.childCount
+            children = min(child_count, max(remaining, 0))
+            if children < child_count:
                 result["truncated"] = True
             for index in range(children - 1, -1, -1):
                 child = node[index]
