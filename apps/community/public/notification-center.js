@@ -73,6 +73,7 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
   const store = createNotificationStore();
   if (!mount) return { ...store, destroy() { store.reset(); } };
   const doc = mount.ownerDocument;
+  const win = doc.defaultView;
   let generation = 0;
   let opened = false;
   let lastUnread = 0;
@@ -130,8 +131,33 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
   live.setAttribute("aria-live", "polite");
   panel.append(header, settings, actions, list);
   mount.replaceChildren(bell, panel, live);
+  // A top-layer popup escapes the composer's and split pane's glass/overflow.
+  // Older browsers use a body portal with the same fixed viewport positioning.
+  const topLayer = typeof panel.showPopover === "function";
+  if (topLayer) panel.setAttribute("popover", "manual");
+  else if (doc.body) doc.body.append(panel);
+  const position = () => {
+    if (!opened || !win) return;
+    const viewport = win.visualViewport;
+    const leftEdge = (viewport?.offsetLeft || 0) + 12;
+    const topEdge = (viewport?.offsetTop || 0) + 12;
+    const viewportWidth = viewport?.width || win.innerWidth;
+    const viewportHeight = viewport?.height || win.innerHeight;
+    const width = Math.max(1, Math.min(370, viewportWidth - 24));
+    panel.style.width = `${width}px`;
+    panel.style.maxHeight = `${Math.max(1, viewportHeight - 24)}px`;
+    const anchor = bell.getBoundingClientRect();
+    const height = panel.getBoundingClientRect().height;
+    const bottomEdge = topEdge + viewportHeight - 24;
+    const below = anchor.bottom + 10;
+    const above = anchor.top - height - 10;
+    const top = below + height <= bottomEdge ? below : Math.max(topEdge, above);
+    panel.style.left = `${Math.max(leftEdge, Math.min(anchor.right - width, leftEdge + viewportWidth - 24 - width))}px`;
+    panel.style.top = `${Math.min(Math.max(topEdge, top), bottomEdge - height)}px`;
+  };
   const close = (restoreFocus = false) => {
     opened = false;
+    if (topLayer && panel.matches(":popover-open")) panel.hidePopover();
     panel.hidden = true;
     bell.setAttribute("aria-expanded", "false");
     if (restoreFocus) bell.focus();
@@ -184,15 +210,23 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
       if (focusedId === item.id) entry.focus({ preventScroll: true });
     }
     list.scrollTop = scroll;
+    if (topLayer && !panel.matches(":popover-open")) panel.showPopover();
+    position();
   };
-  bell.addEventListener("click", () => { opened = !opened; render(); if (opened) closeButton.focus(); });
+  bell.addEventListener("click", () => { if (opened) close(); else { opened = true; render(); closeButton.focus(); } });
   closeButton.addEventListener("click", () => close(true));
   markAll.addEventListener("click", () => { store.markAllRead(); render(); });
-  const onOutside = (event) => { if (opened && !mount.contains(event.target)) close(); };
+  const onOutside = (event) => { if (opened && !mount.contains(event.target) && !panel.contains(event.target)) close(); };
   const onKey = (event) => { if (opened && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); } };
   doc.addEventListener("pointerdown", onOutside);
   doc.addEventListener("focusin", onOutside);
   doc.addEventListener("keydown", onKey);
+  doc.addEventListener("scroll", position, true);
+  win?.addEventListener("resize", position);
+  win?.visualViewport?.addEventListener("resize", position);
+  win?.visualViewport?.addEventListener("scroll", position);
+  const resizeObserver = win?.ResizeObserver ? new win.ResizeObserver(position) : null;
+  resizeObserver?.observe(panel);
   render();
   return {
     setSession(session) { const before = store.snapshot().userId; store.setSession(session); if (before !== store.snapshot().userId) { generation++; close(); list.replaceChildren(); live.textContent = ""; } render(); },
@@ -200,6 +234,15 @@ export function createNotificationCenter({ mount, openRoom, toast = () => {} }) 
     observeProgress(id, event, options) { if (store.observeProgress(id, event, options)) render(); },
     markRoomRead(id) { store.markRoomRead(id); render(); },
     reset() { generation++; store.reset(); close(); list.replaceChildren(); live.textContent = ""; render(); },
-    destroy() { generation++; store.reset(); doc.removeEventListener("pointerdown", onOutside); doc.removeEventListener("focusin", onOutside); doc.removeEventListener("keydown", onKey); mount.replaceChildren(); },
+    destroy() {
+      generation++; store.reset(); close();
+      doc.removeEventListener("pointerdown", onOutside); doc.removeEventListener("focusin", onOutside); doc.removeEventListener("keydown", onKey); doc.removeEventListener("scroll", position, true);
+      win?.removeEventListener("resize", position);
+      win?.visualViewport?.removeEventListener("resize", position);
+      win?.visualViewport?.removeEventListener("scroll", position);
+      resizeObserver?.disconnect();
+      if (doc.body && panel.parentElement === doc.body) panel.remove();
+      mount.replaceChildren();
+    },
   };
 }

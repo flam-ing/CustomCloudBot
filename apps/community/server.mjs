@@ -1061,6 +1061,7 @@ export async function startCommunity(options = {}) {
           "/agent-presence.css": ["agent-presence.css", "text/css"],
           "/notification-center.js": ["notification-center.js", "text/javascript"],
           "/branch-graph.mjs": ["branch-graph.mjs", "text/javascript"],
+          "/session-colors.js": ["session-colors.js", "text/javascript"],
           "/branch-graph.css": ["branch-graph.css", "text/css"],
           "/routines.js": ["routines.js", "text/javascript"],
           "/routines.css": ["routines.css", "text/css"],

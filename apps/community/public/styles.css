@@ -1533,3 +1533,45 @@ button:active .agent-art { transform:scale(.94); }
 .context-scale { display:flex; justify-content:space-between; color:#9095a0; font-variant-numeric:tabular-nums; margin-top:5px; font-size:10px; }
 @media(hover:none) { .message-actions { opacity:1; } }
 @media(prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
+
+/* In split view, each conversation owns its header; there is no global header row. */
+.main-panel.is-split .topbar { display:flex; height:46px; min-height:46px; padding:0 44px 0 10px; gap:8px; }
+.main-panel.is-split .topbar-leading { flex:1; min-width:0; }
+.main-panel.is-split .topbar .agent-presence, .main-panel.is-split .topbar .demo-badge { display:none; }
+.main-panel.is-split .topbar h1 { font-size:13px; }
+.main-panel.is-split .topbar-actions { flex-wrap:nowrap; gap:1px; }
+.main-panel.is-split .topbar-actions .icon-button { width:28px; height:30px; }
+.main-panel.is-split #member-count { display:none; }
+.main-panel.is-split .pane-bar { height:46px; min-height:46px; gap:8px; }
+.main-panel.is-split .pane-bar h2 { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.main-panel.is-split .pane-close { top:7px; }
+.archived-dialog { width:min(460px,calc(100vw - 32px)); padding:22px; border:1px solid var(--glass-edge,var(--line)); border-radius:22px; color:var(--text); background:var(--glass-modal,var(--surface)); backdrop-filter:blur(28px); -webkit-backdrop-filter:blur(28px); }
+.archived-dialog header,.archived-dialog-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.archived-dialog h2 { font-size:18px; margin:0; }
+.archived-dialog-row { margin-top:12px; }
+.archived-dialog-row span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.archived-dialog button { border:1px solid var(--line); border-radius:10px; background:var(--hover); color:inherit; padding:6px 10px; flex-shrink:0; }
+
+/* A single conversation has no header strip. Tools live in the input instead. */
+.main-panel { position:relative; }
+.main-panel:not(.is-split) > .topbar { display:contents; }
+.main-panel:not(.is-split) > .topbar .agent-presence,
+.main-panel:not(.is-split) > .topbar .header-identity { display:none; }
+.main-panel:not(.is-split) > .topbar .topbar-leading { position:absolute; top:10px; left:10px; z-index:5; }
+.main-panel:not(.is-split) > .topbar #mobile-menu { background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+.main-panel:not(.is-split) #message-list { padding-top:52px; }
+.model-controls > .topbar-actions { gap:0; margin-left:auto; order:1; }
+.model-controls > .context-controls { order:2; }
+.model-controls > .topbar-actions .icon-button { width:28px; height:28px; padding:5px; background:transparent; border:0; border-radius:8px; }
+.model-controls > .topbar-actions .icon { width:18px; height:18px; }
+.model-controls > .topbar-actions #member-count { display:none; }
+.model-controls > .topbar-actions .demo-badge { display:none; }
+@media(max-width:720px) { .model-controls > .topbar-actions { gap:1px; } }
+
+.model-controls > .topbar-actions .notification-bell { width:28px; height:28px; padding:5px; }
+.model-controls > .topbar-actions .notification-bell svg { width:18px; height:18px; }
+@media(max-width:720px) {
+  #composer-form .model-controls { flex-wrap:wrap; gap:6px; }
+  #composer-form .model-controls > .topbar-actions { order:3; flex-basis:100%; justify-content:flex-end; margin-left:0; }
+  #composer-form .model-controls > .context-controls { margin-left:auto; }
+}

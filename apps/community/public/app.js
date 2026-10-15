@@ -12,6 +12,7 @@ import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
 import { layoutBranches, relatedBranchIds } from "/branch-graph.mjs";
+import { sessionColors } from "/session-colors.js";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
 import { createMessageQueue } from "/message-queue.js";
@@ -271,6 +272,7 @@ function showAuth() {
   state.focusPane = 0;
   state.models = [];
   dockRects = [{x:0,y:0,w:1,h:1}];
+  applyDockLayout();
   pendingDock = null;
   const paneGrid = $("#pane-grid");
   if (paneGrid) {
@@ -574,9 +576,22 @@ function branchSvg(tag, attributes = {}) {
   for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
   return element;
 }
+function paintSession(element, color) {
+  if (!element) return;
+  if (color) { element.style.setProperty("--pane-tint", color.tint); element.style.setProperty("--session-color", color.color); }
+  else { element.style.removeProperty("--pane-tint"); element.style.removeProperty("--session-color"); }
+}
+function syncSessionColors(colors = sessionColors(state.rooms, state.forks)) {
+  const notices = $("#notification-center");
+  const noticeHost = !state.selectedRoom || state.selectedRoom === MONITOR_ROOM ? $(".profile-row") : $(".topbar-actions");
+  if (notices && noticeHost && notices.parentElement !== noticeHost) noticeHost.append(notices);
+  dockPanels().forEach((panel, index) => paintSession(panel, colors.get(dockRoomAt(index))));
+  paintSession($("#branch-current"), colors.get(currentBranchId()));
+}
 function renderRooms() {
   const focus = els.roomList.contains(document.activeElement) ? {roomId: document.activeElement.dataset.roomId, action: document.activeElement.dataset.branchAction} : null;
   renderAccountTools(); els.roomList.replaceChildren(); updateBranchControls();
+  const colors = sessionColors(state.rooms, state.forks);
   if (showDeletedRooms) {
     const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM);
     for (const room of archived) {
@@ -597,11 +612,11 @@ function renderRooms() {
     for (const edge of graph.edges) {
       const from = byId.get(edge.from), to = byId.get(edge.to), fromX=x(from), toX=x(to), end=y(to), start=y(from);
       const d = fromX === toX ? `M${fromX},${start}V${end}` : `M${fromX},${start}V${end-18}Q${fromX},${end} ${(fromX+toX)/2},${end}H${toX}`;
-      svg.append(branchSvg("path", {d, class:`branch-path branch-color-${from.lane % 3}${edge.secondary ? " is-merge" : ""}`}));
+      svg.append(branchSvg("path", {d, style:`--branch-color:${colors.get(from.id)?.color || "currentColor"}`, class:`branch-path branch-color-${from.lane % 3}${edge.secondary ? " is-merge" : ""}`}));
     }
     for (const row of graph.rows) {
       const active = currentBranchId() === row.id;
-      svg.append(branchSvg("circle", {cx:x(row), cy:y(row), r:active?5:3.5, class:`branch-node branch-color-${row.lane % 3}${active?" is-selected":""}`}));
+      svg.append(branchSvg("circle", {cx:x(row), cy:y(row), r:active?5:3.5, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node branch-color-${row.lane % 3}${active?" is-selected":""}`}));
       const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
       button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
       const copy=document.createElement("span"); copy.className="branch-row-copy";
@@ -610,23 +625,37 @@ function renderRooms() {
       const relation=row.operation==="merge"?"Merge":row.operation==="fork"?"Fork":"줄기";
       meta.textContent=relation+(parentNames.length?" · "+parentNames.join(" + "):"")+(row.room.pinned?" · 고정":"");
       button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":""}`);
-      copy.append(name,meta); button.append(copy);
+      copy.append(name,meta); button.append(copy); paintSession(button, colors.get(row.id));
       button.onclick=()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,row.id);else void selectRoom(row.id);closeSidebar();};
       graphList.append(button);
     }
     graphList.prepend(svg); els.roomList.append(graphList);
     if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent="아래 계정 메뉴에서 새 대화를 시작하세요.";els.roomList.append(empty); }
   }
-  const footer=document.createElement("div");footer.className="branch-list-footer";
-  const trash=document.createElement("button");trash.className="deleted-rooms-toggle";trash.type="button";trash.dataset.branchAction="archive";trash.textContent=showDeletedRooms?"← 가지로 돌아가기":"보관한 가지"+(state.rooms.some(room=>room.archived)?" ("+state.rooms.filter(room=>room.archived).length+")":"");trash.onclick=()=>{showDeletedRooms=!showDeletedRooms;renderRooms();};
-  const reset=document.createElement("button");reset.type="button";reset.className="branch-reset";reset.textContent="목록 비우기";reset.title="기존 가지를 보관하고 새 줄기를 시작합니다";reset.dataset.branchAction="reset";reset.onclick=()=>void resetConversations(reset);
-  footer.append(trash,reset);els.roomList.append(footer);
+  syncSessionColors(colors);
   if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
+}
+function openArchivedConversations() {
+  const dialog = document.createElement("dialog"); dialog.className = "archived-dialog";
+  const header = document.createElement("header"), title = document.createElement("h2"), close = document.createElement("button");
+  title.textContent = "대화 복원"; close.type = "button"; close.textContent = "×"; close.setAttribute("aria-label", "닫기"); close.onclick = () => dialog.close(); header.append(title, close); dialog.append(header);
+  const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM);
+  if (!archived.length) { const empty = document.createElement("p"); empty.textContent = "복원할 대화가 없습니다."; dialog.append(empty); }
+  for (const room of archived) {
+    const row = document.createElement("div"), name = document.createElement("span"), restore = document.createElement("button"); row.className = "archived-dialog-row";
+    name.textContent = room.name; restore.type = "button"; restore.textContent = "복원"; restore.setAttribute("aria-label", room.name + " 복원");
+    restore.onclick = async () => { restore.disabled = true; await updateRoomListPreference(room, {archived:false}); if (!state.rooms.find(item => item.id === room.id)?.archived) row.remove(); else restore.disabled = false; };
+    row.append(name, restore); dialog.append(row);
+  }
+  dialog.addEventListener("close", () => { dialog.remove(); $("#profile-customize").focus(); }); document.body.append(dialog); dialog.showModal();
 }
 function showEmpty() {
   clearPendingAttachments();
   state.selectedRoom = null;
   state.roomData = null;
+  state.extra.forEach(pane => clearAttachmentDraft(pane)); state.extra = []; state.layout = 1; state.focusPane = 0;
+  $$(".extra-pane").forEach(pane => { pane._desktop?.destroy(); pane.remove(); });
+  dockRects = [{x:0,y:0,w:1,h:1}]; $("#pane-grid").dataset.panes = "1"; applyDockLayout();
   desktopUI?.setRoom(null);
   stopPolling();
   els.empty.classList.remove("is-hidden");
@@ -1596,7 +1625,7 @@ function closeContextPopover() {
 }
 function renderPopoverContext(section, context) {
   section.replaceChildren();
-  const heading=contextElement("h3","Context window"),amount=contextElement("strong",`${contextPercent(context)}%`,"context-popover-percent");
+  const heading=contextElement("h3","대화에 담는 맥락"),amount=contextElement("strong",`${contextPercent(context)}%`,"context-popover-percent");
   const top=contextElement("div",undefined,"context-section-heading");top.append(heading,amount);
   const meter=document.createElement("progress");meter.max=100;meter.value=contextPercent(context);meter.setAttribute("aria-label","앱 대화 맥락 추정 사용률");
   const scale=contextElement("div",undefined,"context-scale");
@@ -1607,20 +1636,20 @@ function renderPopoverContext(section, context) {
   for(const [label,value] of [["최근 대화",context?.messageTokens],["압축 요약",context?.summaryTokens]]) {
     const row=contextElement("div");row.append(contextElement("span",label),contextElement("span",`${contextNumber(value)} 토큰`));breakdown.append(row);
   }
-  section.append(top,meter,scale,tokens,breakdown,contextElement("p","앱이 다음 요청에 담는 대화 범위입니다. 시스템 지시·도구·이미지와 모델 전체 컨텍스트 창은 제외됩니다.","context-note"));
+  section.append(top,meter,scale,tokens,breakdown,contextElement("p","다음 답변에 전달할 대화의 추정량입니다. 모델의 전체 한도나 API 잔여량은 아닙니다.","context-note"));
 }
 function usageTime(value) {
   const date=new Date(value);return value!=null&&!Number.isNaN(date.getTime())?date.toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}):"시각 확인 불가";
 }
 function renderUsageSection(section, usage) {
-  section.replaceChildren(contextElement("h3","이 대화의 API 기록"));
+  section.replaceChildren(contextElement("h3","이 가지의 API 사용량"));
   const counts=contextElement("div",undefined,"context-usage-counts");
   for(const [label,value] of [["입력 토큰",usage.inputTokens],["출력 토큰",usage.outputTokens],["API 응답",usage.requests]]) {
     const item=contextElement("div");item.append(contextElement("strong",contextNumber(value)),contextElement("span",label));counts.append(item);
   }
   section.append(counts);
   if(usage.last) section.append(contextElement("p",`최근 ${usage.last.provider || "공급자 미제공"} · ${usage.last.model || "모델 미제공"}`,"context-note"));
-  else section.append(contextElement("p","기록된 API 호출이 없습니다.","context-note"));
+  else section.append(contextElement("p","이 가지에서 아직 API 응답을 기록하지 않았습니다.","context-note"));
   const providers=(Array.isArray(usage.providers)?[...usage.providers]:[]).sort((a,b)=>new Date(b.at)-new Date(a.at));
   if(providers.length) {
     const quota=contextElement("section",undefined,"context-quota");quota.append(contextElement("h3","공급자 한도"));
@@ -1631,22 +1660,36 @@ function renderUsageSection(section, usage) {
     });
     const values=contextElement("div");
     function showProvider() {
-      const provider=providers[Number(selector.value)||0],groq=String(provider.provider).toLowerCase()==="groq";
-      values.replaceChildren(contextElement("p",`${usageTime(provider.at)} 기준${groq?" · 조직 공유":""}`,"context-note"));
+      const provider=providers[Number(selector.value)||0],name=String(provider.provider).toLowerCase(),groq=name==="groq";
+      values.replaceChildren(contextElement("p",`${usageTime(provider.at)} 기준${groq?" · 조직 공유":name==="gemini"?" · 프로젝트 공유":""}`,"context-note"));
       for(const [key,label] of [["requests","요청"],["tokens","토큰"]]) {
         const limit=provider.limits?.[key],row=contextElement("div",undefined,"context-quota-row");
         const value=limit?`${contextNumber(limit.remaining)} / ${contextNumber(limit.limit)} 남음`:"공급자 미제공";
         row.append(contextElement("span",label+(groq?(key==="requests"?" / 일":" / 분"):"")),contextElement("span",value));values.append(row);
         if(limit?.reset!=null)values.append(contextElement("p",`갱신: ${String(limit.reset).slice(0,100)}`,"context-note"));
       }
+      if(["requests","tokens"].some(key=>provider.limits?.[key]?.remaining==null||provider.limits?.[key]?.limit==null)) {
+        const consoles={
+          groq:["Groq 한도 확인","https://console.groq.com/settings/limits"],
+          gemini:["AI Studio 한도 확인","https://aistudio.google.com/rate-limit"],
+          huggingface:["Hugging Face 사용량 확인","https://huggingface.co/settings/inference-providers/overview"],
+          nvidia:["NVIDIA API 콘솔 열기","https://build.nvidia.com/"],
+        };
+        const note=contextElement("p","API 응답에 없는 한도는 연결한 계정의 콘솔에서 확인해 주세요.","context-note");
+        if(consoles[name]) {
+          const [label,url]=consoles[name],link=contextElement("a",label);
+          link.href=url;link.target="_blank";link.rel="noopener noreferrer";
+          note.append(document.createElement("br"),link);
+        }
+        values.append(note);
+      }
       contextPopover?.position();
     }
     selector.onchange=showProvider;showProvider();quota.append(selector,values);section.append(quota);
   }
   const scope=contextElement("details",undefined,"context-scope-note");scope.append(contextElement("summary","집계 기준"));
-  scope.append(contextElement("p","기록 시작 이후 이 대화의 API 응답만 집계합니다. 전체 계정 사용량이나 청구액은 아닙니다. 공급자 한도는 마지막 응답 시점의 값입니다.","context-note"));
-  if(usage.quotaNote)scope.append(contextElement("p",usage.quotaNote,"context-note"));
-  else if(!providers.length)scope.append(contextElement("p","제공된 공급자 잔여 한도 정보가 없습니다.","context-note"));
+  scope.append(contextElement("p","기록 시작 이후 이 가지에서 받은 응답만 집계합니다. Fork 이전 사용량은 복사하지 않습니다.","context-note"));
+  scope.append(contextElement("p","공급자 한도는 마지막 응답 시점의 값이며, 전체 계정 사용량·청구액·남은 크레딧은 포함하지 않습니다.","context-note"));
   scope.addEventListener("toggle",()=>contextPopover?.position());section.append(scope);
 }
 async function openContextPopover(trigger,pane) {
@@ -1904,6 +1947,7 @@ function setLayout(count) {
     $("#room-view").style.gridColumn = "";
     $("#room-view").classList.remove("is-focus");
     $$(".extra-pane").forEach((pane) => pane.remove());
+    dockRects = [{x:0,y:0,w:1,h:1}]; applyDockLayout();
     $$(".split-picker button").forEach((button) => {
       button.classList.remove("is-on");
       button.setAttribute("aria-pressed", "false");
@@ -1944,6 +1988,7 @@ function renderExtraPanes() {
     const room = state.rooms.find((item) => item.id === pane.roomId);
     const section = document.createElement("section");
     section.className = "room-view extra-pane" + (state.focusPane === index + 1 ? " is-focus" : "");
+    section.dataset.paneIndex = String(index + 1);
     if (spans) section.style.gridColumn = "span " + spans[index + 1];
     const focusBranchPane = () => {
       if(state.focusPane===index+1)return;
@@ -2302,6 +2347,7 @@ function bind() {
   });
   window.addEventListener("resize",closeProfileMenu);
   $("#edit-profile-button").addEventListener("click",()=>profileUI?.open());
+  $("#restore-conversations").addEventListener("click",openArchivedConversations);
   $("#open-routines").addEventListener("click",openRoutines);
   $("#open-bot-setup").addEventListener("click",()=>void setupUI?.open());
   $("#open-mail").addEventListener("click",()=>void mailUI?.open());
@@ -2393,7 +2439,17 @@ loadSession();
 function dockPanels() { return [$("#room-view"), ...$$(".extra-pane")]; }
 function applyDockLayout() {
   const grid = $("#pane-grid");
-  grid.classList.toggle("docked", dockRects.length > 1);
+  const split = dockRects.length > 1;
+  grid.classList.toggle("docked", split);
+  const topbar = $(".topbar"), main = $(".main-panel"), primary = $("#room-view");
+  main.classList.toggle("is-split", split);
+  // Keep the existing controls and handlers, but make them the first pane's header.
+  if (split && topbar.parentElement !== primary) primary.prepend(topbar);
+  else if (!split && topbar.parentElement !== main) main.insertBefore(topbar, grid);
+  topbar.classList.toggle("pane-bar", split);
+  const actions = $(".topbar-actions");
+  const toolsHost = split ? topbar : $("#composer-form .model-controls");
+  if (actions && actions.parentElement !== toolsHost) toolsHost.append(actions);
   dockPanels().forEach((panel, index) => {
     panel.dataset.dockIndex = index;
     let close=panel.querySelector(":scope > .pane-close");
@@ -2405,9 +2461,10 @@ function applyDockLayout() {
     const rect = dockRects[index];
     if (rect && dockRects.length > 1) Object.assign(panel.style, {left:rect.x*100+"%", top:rect.y*100+"%", width:rect.w*100+"%", height:rect.h*100+"%", gridColumn:""});
     else for (const key of ["left","top","width","height"]) panel.style[key] = "";
-    const handle = index ? panel.querySelector(".pane-bar") : $(".header-identity");
+    const handle = index || split ? panel.querySelector(".pane-bar") : $(".header-identity");
     if (handle) { handle.draggable = false; handle.dataset.dockIndex = index; handle.title = "드래그해서 이동 · 우클릭으로 분할"; }
   });
+  syncSessionColors();
 }
 async function closeDockPane(index) {
   if(dockRects.length<2)return;
