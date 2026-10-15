@@ -1,1 +1,26 @@
-/* Server dashboard. */
+/* Server dashboard, 통합 관리, workspace window theme and the sign-in screen.
+   Loads last, after glass.css; values use the shared tokens with fallbacks. */
+
+/* ---- Layers: workspace windows (30-39) stay below drawers, toasts and dialogs. */
+.toast { z-index: var(--z-toast, 70); }
+@media (max-width: 720px) {
+  .sidebar { z-index: var(--z-drawer, 50); }
+  .sidebar-scrim.is-visible { z-index: calc(var(--z-drawer, 50) - 1); }
+}
+
+/* ---- Workspace window: file rows are list items, not gray buttons. */
+.workspace-file-row { background: transparent; color: var(--text, #2e3242); }
+.workspace-file-row .workspace-file-name { color: var(--text, #2e3242); }
+.workspace-file-row[data-type="directory"] .workspace-file-name { font-weight: var(--fw-medium, 500); }
+.workspace-file-row[data-type="directory"] .workspace-file-icon { fill: var(--accent-soft, rgba(185, 156, 219, .16)); }
+.workspace-file-row .workspace-file-size { color: var(--muted, #606679); }
+.workspace-file-row:hover:not(:disabled) { background: var(--hover, rgba(126, 96, 180, .08)); color: var(--text, #2e3242); }
+.workspace-file-row:active:not(:disabled) { background: var(--selected, rgba(132, 101, 193, .14)); }
+.workspace-file-row:focus-visible { outline: 2px solid var(--accent, #7956b5); outline-offset: -2px; }
+.workspace-download:hover { background: var(--hover, rgba(126, 96, 180, .08)); }
+/* A selected tab stays clearly selected even while that view is unavailable. */
+.workspace-tabs .workspace-button[aria-selected="true"]:disabled { opacity: 1; background: var(--selected, rgba(132, 101, 193, .14)); color: var(--muted, #606679); }
+.workspace-popup .workspace-tabs .workspace-button[aria-selected="true"] { font-weight: var(--fw-medium, 500); }
+@media (max-width: 720px) {
+  .workspace-popup { background: #f7f5fc; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}

@@ -1,10 +1,26 @@
 import {createWorkspaceTerminal} from './workspace-terminal.js';
 import {configureDesktopInput,enterDesktopScreen} from './desktop-screen.js';
-import {createWorkspaceWindows,workspaceBounds} from './workspace-windows.js';
-let popupLayer=40;
+import {createWorkspaceWindows,workspaceBounds,workspaceLayers,CASCADE_STEP} from './workspace-windows.js';
+// Open windows share one layer band (--z-workspace, 30-39) below drawers, toasts and dialogs.
+const stack=[];
+const restack=()=>{const layers=workspaceLayers(stack.length);stack.forEach((panel,index)=>{panel.style.zIndex=`calc(var(--z-workspace, 30) + ${layers[index]})`;});};
+const raisePanel=panel=>{const index=stack.indexOf(panel);if(index>=0)stack.splice(index,1);stack.push(panel);restack();};
+const dropPanel=panel=>{const index=stack.indexOf(panel);if(index>=0){stack.splice(index,1);restack();}};
+// Phones open the window as a full-screen sheet; it cannot be dragged or resized there.
+const sheetQuery=globalThis.matchMedia?.('(max-width: 720px)');
+const isSheet=()=>!!sheetQuery?.matches;
+// Keep a new window above the composer so people can keep typing while it is open.
+function composerReserve() {
+  let top=innerHeight;
+  for(const composer of document.querySelectorAll('.composer')){const rect=composer.getBoundingClientRect();if(rect.height>0&&rect.width>0&&rect.top>innerHeight*.35&&rect.top<top)top=rect.top;}
+  return Math.max(0,innerHeight-top);
+}
 const VIEWS=[['browser','브라우저'],['terminal','터미널'],['files','파일']];
 const el=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
-const actionButton=(label,text=label)=>{const button=el('button',text,'workspace-button');button.type='button';button.setAttribute('aria-label',label);button.title=label;return button;};
+const actionButton=(label,text=label)=>{const button=el('button',text,'workspace-button');button.type='button';if(label!==text){button.setAttribute('aria-label',label);button.title=label;}return button;};
+const ICON_PATHS={directory:'M3.5 7.5a2 2 0 0 1 2-2h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z',file:'M7 3.5h6.5l4.5 4.5v10.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2Zm6 0V8.5h5'};
+const fileIcon=type=>{const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),path=document.createElementNS('http://www.w3.org/2000/svg','path');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('class','workspace-file-icon');svg.setAttribute('aria-hidden','true');path.setAttribute('d',ICON_PATHS[type]||ICON_PATHS.file);svg.append(path);return svg;};
+const formatSize=size=>!Number.isFinite(size)?'':size>=1048576?(size/1048576).toLocaleString('ko-KR',{maximumFractionDigits:1})+' MB':size>=1024?(size/1024).toLocaleString('ko-KR',{maximumFractionDigits:1})+' KB':size.toLocaleString('ko-KR')+' 바이트';
 
 // X11 keysyms carry case: a lowercase keysym can cancel Shift in x11vnc.
 export function sendChromeShortcut(rfb,key,shift=false) {
@@ -39,7 +55,7 @@ export function createDesktopUI({api,getRoomId,getRoomName=()=>'',toast=()=>{},m
   const topbar=mount?.querySelector('.pane-bar')||document.querySelector('.topbar-actions');
   const toggle=actionButton('작업 공간 열기','▣');toggle.className='icon-button desktop-button';toggle.setAttribute('aria-expanded','false');toggle.hidden=true;topbar?.append(toggle);
   const windows=createWorkspaceWindows({
-    createWindow:(roomId,options)=>createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,...options}),
+    createWindow:(roomId,options)=>createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,returnFocus:()=>toggle,...options}),
     onLimit:()=>toast('열어둔 작업 공간 하나를 닫은 뒤 다시 열어주세요.'),
     onChange:({roomId,open})=>{toggle.hidden=!roomId;toggle.setAttribute('aria-expanded',String(open));},
   });
@@ -52,29 +68,36 @@ export function createDesktopUI({api,getRoomId,getRoomName=()=>'',toast=()=>{},m
     destroy(){windows.destroy();toggle.remove();},
   };
 }
-function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,index,onClose}) {
+function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,index,onClose,returnFocus=()=>null}) {
   const state={roomId,view:VIEWS.some(([id])=>id===initialView)?initialView:'browser',generation:0,abort:null,cleanup:null,destroyed:false,paths:new Map()};
   const panel=el('aside',undefined,'desktop-panel workspace-popup');panel.setAttribute('aria-label','작업 공간');panel.setAttribute('role','dialog');panel.dataset.roomId=roomId;panel.hidden=true;
   const head=el('div',undefined,'desktop-head'),title=el('strong','작업 공간'),actions=el('div',undefined,'workspace-window-actions'),maximize=actionButton('작업 공간 확대','□'),close=actionButton('작업 공간 닫기','×');close.classList.add('workspace-close');actions.append(maximize,close);head.append(title,actions);head.tabIndex=0;head.title='드래그하여 이동 · 방향키로 위치 이동';head.setAttribute('aria-label','작업 공간 창 이동');
   const resize=actionButton('작업 공간 크기 조절','');resize.className='workspace-resize-handle';resize.title='드래그 또는 방향키로 크기 조절';
-  let geometry=workspaceBounds({}, {width:innerWidth,height:innerHeight},(index%5)*28),beforeMaximize=null;
-  const raise=()=>{panel.style.zIndex=String(++popupLayer);};
-  const layout=next=>{geometry=workspaceBounds(next,{width:innerWidth,height:innerHeight});for(const [key,value]of Object.entries(geometry))panel.style[key]=value+'px';};
-  const restore=()=>{beforeMaximize=null;maximize.textContent='□';maximize.setAttribute('aria-label','작업 공간 확대');};
-  const setMaximized=()=>{if(beforeMaximize){const previous=beforeMaximize;restore();layout(previous);}else{beforeMaximize={...geometry};layout({left:8,top:8,width:innerWidth-16,height:innerHeight-16});maximize.textContent='❐';maximize.setAttribute('aria-label','작업 공간 크기 복원');}};
+  // `preferred` is what the person chose; `geometry` is that choice fitted to the
+  // current viewport, so shrinking the browser and widening it again restores it.
+  const viewport=()=>({width:innerWidth,height:innerHeight}),maximized=()=>({left:8,top:8,width:innerWidth-16,height:innerHeight-16});
+  let preferred=workspaceBounds({},viewport(),(index%6)*CASCADE_STEP,composerReserve()),geometry=preferred,isMaximized=false;
+  const raise=()=>raisePanel(panel);
+  const place=()=>{for(const [key,value]of Object.entries(geometry))panel.style[key]=value+'px';};
+  const layout=next=>{geometry=workspaceBounds(next,viewport());preferred=geometry;place();};
+  const fit=()=>{geometry=workspaceBounds(isMaximized?maximized():preferred,viewport());place();};
+  const setMaximizeButton=()=>{maximize.textContent=isMaximized?'❐':'□';maximize.setAttribute('aria-label',isMaximized?'작업 공간 크기 되돌리기':'작업 공간 크게 보기');maximize.title=maximize.getAttribute('aria-label');maximize.setAttribute('aria-pressed',String(isMaximized));};
+  // Moving or resizing a maximized window continues from what is on screen.
+  const restore=()=>{if(!isMaximized)return;isMaximized=false;preferred=geometry;setMaximizeButton();};
+  const setMaximized=()=>{isMaximized=!isMaximized;setMaximizeButton();fit();};
   let drag=null;
-  const pointerDown=event=>{if(event.button!==0||event.target.closest('button')&&event.currentTarget!==resize)return;event.preventDefault();raise();restore();drag={target:event.currentTarget,id:event.pointerId,x:event.clientX,y:event.clientY,...geometry,resize:event.currentTarget===resize};drag.target.setPointerCapture?.(event.pointerId);};
+  const pointerDown=event=>{if(event.button!==0||isSheet()||event.target.closest('button')&&event.currentTarget!==resize)return;event.preventDefault();raise();restore();drag={target:event.currentTarget,id:event.pointerId,x:event.clientX,y:event.clientY,...geometry,resize:event.currentTarget===resize};drag.target.setPointerCapture?.(event.pointerId);};
   const pointerMove=event=>{if(!drag||event.pointerId!==drag.id)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;layout(drag.resize?{...drag,width:drag.width+dx,height:drag.height+dy}:{...drag,left:drag.left+dx,top:drag.top+dy});};
   const pointerUp=event=>{if(drag&&event.pointerId===drag.id){try{drag.target.releasePointerCapture?.(event.pointerId);}catch{}drag=null;}};
-  for(const target of [head,resize]){target.addEventListener('pointerdown',pointerDown);target.addEventListener('pointermove',pointerMove);target.addEventListener('pointerup',pointerUp);target.addEventListener('pointercancel',pointerUp);target.addEventListener('keydown',event=>{if(event.target!==target||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();restore();const amount=event.shiftKey?40:10,dx=event.key==='ArrowLeft'?-amount:event.key==='ArrowRight'?amount:0,dy=event.key==='ArrowUp'?-amount:event.key==='ArrowDown'?amount:0;layout(target===resize?{...geometry,width:geometry.width+dx,height:geometry.height+dy}:{...geometry,left:geometry.left+dx,top:geometry.top+dy});});}
-  maximize.onclick=setMaximized;head.ondblclick=event=>{if(!event.target.closest('button'))setMaximized();};panel.addEventListener('pointerdown',raise);
+  for(const target of [head,resize]){target.addEventListener('pointerdown',pointerDown);target.addEventListener('pointermove',pointerMove);target.addEventListener('pointerup',pointerUp);target.addEventListener('pointercancel',pointerUp);target.addEventListener('keydown',event=>{if(event.target!==target||isSheet()||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();restore();const amount=event.shiftKey?40:10,dx=event.key==='ArrowLeft'?-amount:event.key==='ArrowRight'?amount:0,dy=event.key==='ArrowUp'?-amount:event.key==='ArrowDown'?amount:0;layout(target===resize?{...geometry,width:geometry.width+dx,height:geometry.height+dy}:{...geometry,left:geometry.left+dx,top:geometry.top+dy});});}
+  setMaximizeButton();maximize.onclick=setMaximized;head.ondblclick=event=>{if(!event.target.closest('button')&&!isSheet())setMaximized();};panel.addEventListener('pointerdown',raise);panel.addEventListener('focusin',raise);
   const tabs=el('div',undefined,'workspace-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','작업 공간 보기');
   const buttons=new Map();
   for(const [id,label] of VIEWS){const button=actionButton(label);button.setAttribute('role','tab');button.dataset.view=id;button.onclick=()=>{if(state.view!==id){state.view=id;onViewChange(id);void activate();}};buttons.set(id,button);tabs.append(button);}
   tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const available=[...buttons.values()].filter(button=>!button.disabled),index=available.indexOf(document.activeElement);let next=event.key==='Home'?0:event.key==='End'?available.length-1:(index+(event.key==='ArrowRight'?1:-1)+available.length)%available.length;available[next]?.focus();available[next]?.click();});
   const bar=el('div',undefined,'workspace-statusbar'),status=el('span','','desktop-status'),retry=actionButton('작업 공간 다시 연결','다시 연결');status.setAttribute('role','status');bar.append(status,retry);
   const content=el('div',undefined,'workspace-content');content.setAttribute('role','tabpanel');
-  panel.append(head,tabs,content,bar,resize);document.body.append(panel);layout(geometry);
+  panel.append(head,tabs,content,bar,resize);document.body.append(panel);place();
   const setStatus=(message,kind='')=>{status.textContent=message;status.dataset.kind=kind;};
   const stop=()=>{state.generation++;state.abort?.abort();state.abort=null;state.cleanup?.();state.cleanup=null;};
   const current=generation=>!state.destroyed&&state.generation===generation&&!panel.hidden&&!document.hidden;
@@ -111,7 +134,10 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
     const shortcut=(key,shift=false)=>{if(connected&&active())sendChromeShortcut(rfb,key,shift);};
     newTab.onclick=()=>shortcut('t');incognito.onclick=()=>shortcut('n',true);
     extensions.onclick=()=>{if(!connected)return;shortcut('t');shortcut('l');for(const char of 'chrome://extensions/')rfb.sendKey(char.charCodeAt(0),null);rfb.sendKey(0xff0d,'Enter');rfb.focus();};
-    fullscreen.onclick=()=>void enterDesktopScreen(panel);
+    // The same button leaves full screen; its name follows the real state, including Esc.
+    const syncFullscreen=()=>{const on=document.fullscreenElement===panel;fullscreen.textContent=on?'전체 화면 끝내기':'전체 화면';fullscreen.setAttribute('aria-label',on?'브라우저 전체 화면 끝내기':'브라우저 전체 화면');fullscreen.title=fullscreen.getAttribute('aria-label');};syncFullscreen();
+    document.addEventListener('fullscreenchange',syncFullscreen);
+    fullscreen.onclick=()=>{if(document.fullscreenElement===panel)void document.exitFullscreen?.().catch(()=>{});else void enterDesktopScreen(panel);};
     void(async()=>{
       try{
         const [{default:RFB},ticket]=await Promise.all([import('/vendor/novnc.js'),api(`/api/rooms/${encodeURIComponent(roomId)}/desktop/ticket`,{method:'POST',body:JSON.stringify({view:'browser'}),signal})]);
@@ -125,7 +151,7 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
         rfb.addEventListener('securityfailure',()=>{if(active())setStatus('브라우저에 연결할 권한을 확인해주세요.','error');});
       }catch(error){if(active())fail(error,generation);}
     })();
-    return()=>{disposed=true;connected=false;controls();rfb?.disconnect();rfb=null;viewport.replaceChildren();};
+    return()=>{disposed=true;connected=false;controls();document.removeEventListener('fullscreenchange',syncFullscreen);rfb?.disconnect();rfb=null;viewport.replaceChildren();};
   }
   function mountFiles(base,roomId,generation,signal) {
     const toolbar=el('div',undefined,'workspace-files-toolbar'),up=actionButton('상위 폴더','↑'),root=actionButton('작업 폴더','⌂'),refresh=actionButton('파일 목록 새로고침','↻'),path=el('span','','workspace-file-path');toolbar.append(up,root,refresh,path);
@@ -140,8 +166,9 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
         directory=typeof data.path==='string'?data.path:next;state.paths.set(roomId,directory);path.textContent=directory?'/'+directory.replace(/^\/+/, ''):'작업 폴더';path.title=path.textContent;up.disabled=!directory||directory==='/';
         list.replaceChildren();const entries=Array.isArray(data.entries)?data.entries:[];
         for(const entry of entries){if(!entry||typeof entry.name!=='string'||typeof entry.path!=='string'||!['directory','file'].includes(entry.type))continue;
-          const row=actionButton(entry.name);row.className='workspace-file-row';row.replaceChildren();row.append(el('span',entry.type==='directory'?'▱':'▤','workspace-file-icon'),el('span',entry.name,'workspace-file-name'));
-          const size=entry.type==='directory'?'폴더':Number.isFinite(entry.size)?(entry.size>=1048576?(entry.size/1048576).toFixed(1)+' MiB':entry.size>=1024?(entry.size/1024).toFixed(1)+' KiB':entry.size+' B'):'';row.append(el('span',size,'workspace-file-size'));row.onclick=()=>entry.type==='directory'?void load(entry.path):void preview(entry);list.append(row);
+          const row=actionButton(entry.name);row.classList.add('workspace-file-row');row.replaceChildren();row.dataset.type=entry.type;row.title=entry.name;
+          row.append(fileIcon(entry.type),el('span',entry.name,'workspace-file-name'));
+          const size=entry.type==='directory'?'폴더':formatSize(entry.size);row.append(el('span',size,'workspace-file-size'));row.onclick=()=>entry.type==='directory'?void load(entry.path):void preview(entry);list.append(row);
         }
         if(!list.childElementCount)list.append(el('p','폴더가 비어 있습니다.','workspace-empty'));
         setStatus(data.truncated?'파일이 많아 일부만 표시합니다.':'작업 폴더 · '+entries.length+'개','ready');
@@ -165,11 +192,12 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
     up.onclick=()=>void load(directory.replace(/\/+$/,'').split('/').slice(0,-1).join('/'));root.onclick=()=>void load('');refresh.onclick=()=>void load(directory);void load(directory);
     return ()=>{request++;fileAbort?.abort();revoke();};
   }
-  const open=()=>{if(state.destroyed)return;title.textContent=(getRoomName(roomId)||'대화')+' · 작업 공간';panel.setAttribute('aria-label',title.textContent);raise();if(panel.hidden){panel.hidden=false;layout(geometry);void activate();}};
-  const hide=()=>{stop();panel.hidden=true;drag=null;content.replaceChildren();if(document.fullscreenElement===panel)document.exitFullscreen?.().catch(()=>{});};
+  const open=()=>{if(state.destroyed)return;title.textContent=(getRoomName(roomId)||'대화')+' · 작업 공간';panel.setAttribute('aria-label',title.textContent);raise();if(panel.hidden){panel.hidden=false;fit();void activate();buttons.get(state.view)?.focus({preventScroll:true});}};
+  const hide=()=>{const hadFocus=panel.contains(document.activeElement);stop();panel.hidden=true;drag=null;dropPanel(panel);content.replaceChildren();if(document.fullscreenElement===panel)document.exitFullscreen?.().catch(()=>{});const target=returnFocus();if(hadFocus&&target?.isConnected&&!target.hidden)target.focus({preventScroll:true});};
   close.onclick=onClose;retry.onclick=()=>void activate();
-  panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.target===head){event.preventDefault();onClose();}});
+  // Esc closes from the window's own controls; the remote screen and terminal keep Esc for themselves.
+  panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&(event.target===head||event.target.closest?.('.desktop-head,.workspace-tabs,.workspace-statusbar'))){event.preventDefault();onClose();}});
   const visibility=()=>{if(document.hidden)stop();else if(!panel.hidden)void activate();};document.addEventListener('visibilitychange',visibility);
-  const viewportResize=()=>layout(beforeMaximize?{left:8,top:8,width:innerWidth-16,height:innerHeight-16}:geometry);window.addEventListener('resize',viewportResize);
-  return {open,close:hide,destroy(){if(state.destroyed)return;hide();state.destroyed=true;state.paths.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',viewportResize);panel.remove();}};
+  const viewportResize=()=>fit();window.addEventListener('resize',viewportResize);
+  return {open,close:hide,destroy(){if(state.destroyed)return;hide();state.destroyed=true;state.paths.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',viewportResize);dropPanel(panel);panel.remove();}};
 }
