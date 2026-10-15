@@ -1484,6 +1484,32 @@ button:active .agent-art { transform:scale(.94); }
 .profile-customize { display:flex; align-items:center; gap:12px; min-width:0; flex:1; padding:7px 4px; border:0; border-radius:12px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
 .profile-customize:hover,.profile-customize:focus-visible { background:#ffffff0a; }
 .profile-customize .profile-copy { min-width:0; }
+.sidebar > .sidebar-top { justify-content:flex-end; }
+.sidebar > .branch-heading { padding-top:18px; }
+.profile-menu-trigger { width:100%; padding:10px 8px; }
+.avatar > img { display:block; width:100%; height:100%; border-radius:inherit; object-fit:cover; }
+.avatar.avatar-text { font-size:10px; overflow:hidden; }
+#profile-avatar { width:36px; height:36px; overflow:hidden; }
+#profile-avatar.avatar-text { font-size:11px; }
+.profile-menu-chevron { font-size:18px; color:var(--muted); }
+.profile-menu-trigger[aria-expanded="true"] .profile-menu-chevron { transform:rotate(180deg); }
+.profile-menu {
+  position:fixed; z-index:80; inset:auto; margin:0; width:min(280px,calc(100vw - 24px));
+  box-sizing:border-box; padding:8px; border:1px solid var(--line); border-radius:20px;
+  background:var(--surface); color:var(--text); overflow-y:auto; overscroll-behavior:contain;
+  box-shadow:0 14px 45px #0003;
+}
+.profile-menu::backdrop { background:transparent; }
+.profile-menu-section { display:grid; gap:2px; padding:4px 0; }
+.profile-menu-section + .profile-menu-section { border-top:1px solid var(--line); margin-top:4px; padding-top:8px; }
+.profile-menu-heading { padding:6px 12px; font-size:11px; color:var(--muted); }
+.profile-menu-item { width:100%; min-height:38px; padding:9px 12px; border:0; border-radius:11px; background:transparent; color:inherit; font:inherit; font-size:13px; text-align:left; }
+.profile-menu-item:hover:not(:disabled),.profile-menu-item:focus-visible { background:var(--hover); }
+.profile-menu-item:disabled { cursor:default; opacity:.6; }
+@media(max-width:720px) {
+  .sidebar > .branch-heading { padding-top:4px; }
+  .profile-menu-item { min-height:42px; }
+}
 .message-actions { display:flex; align-items:center; gap:4px; margin-top:8px; opacity:0; transition:opacity 140ms ease; }
 .message:hover .message-actions,.message:focus-within .message-actions { opacity:1; }
 .message-actions button { display:grid; place-items:center; width:34px; height:34px; border:0; border-radius:8px; color:#a8abb3; background:transparent; cursor:pointer; }

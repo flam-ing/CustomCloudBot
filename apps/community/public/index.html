@@ -190,18 +190,8 @@
       <section id="workspace-view" class="workspace-view is-hidden">
         <aside id="sidebar" class="sidebar" aria-label="대화 목록">
           <div id="sidebar-resizer" class="sidebar-resizer" role="separator" tabindex="0" aria-label="대화 목록 너비 조절" aria-controls="sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="420" aria-valuenow="280" aria-disabled="true"></div>
-          <div class="sidebar-top">
-            <span class="app-name"><span data-product-name>CustomCloudBot</span></span>
+          <div class="sidebar-top mobile-only">
             <div class="sidebar-actions">
-              <button
-                id="create-room-button"
-                class="icon-button"
-                type="button"
-                aria-label="새 줄기"
-                title="새 줄기"
-              >
-                <svg class="icon"><use href="#i-plus" /></svg>
-              </button>
               <button
                 id="mobile-close"
                 class="icon-button mobile-only"
@@ -212,43 +202,40 @@
               </button>
             </div>
           </div>
-          <label class="search-field"
-            ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
-            ><input
-              id="room-search"
-              type="search"
-              placeholder="검색"
-              aria-label="대화 검색"
-              autocomplete="off"
-            /><kbd>/</kbd></label
-          >
           <div class="sidebar-heading branch-heading"><span>가지</span><div class="branch-heading-actions"><button id="branch-fork" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-fork" /></svg>Fork</button><button id="branch-merge" type="button" disabled>Merge</button></div><button id="create-sidebar-group" type="button" hidden disabled>+ 그룹</button></div>
           <p id="branch-current" class="branch-current">새 줄기에서 시작하세요</p>
           <nav id="room-list" class="room-list" aria-label="대화 분기 그래프"></nav>
           <div class="sidebar-bottom">
-            <button
-              id="site-invite-button"
-              class="sidebar-command is-hidden"
-              type="button"
-            >
-              <svg class="icon" aria-hidden="true"><use href="#i-invite" /></svg
-              >사용자 초대
-            </button>
-            <div class="pwa-tools" aria-label="앱 및 알림 설정">
-              <button id="install-button" class="sidebar-command is-hidden" type="button">앱으로 설치</button>
-            </div>
             <div class="profile-row">
-              <button id="profile-customize" class="profile-customize" type="button" aria-label="프로필 커스터마이징">
+              <button id="profile-customize" class="profile-customize profile-menu-trigger" type="button" aria-label="계정 및 도구 메뉴" aria-haspopup="dialog" aria-expanded="false" aria-controls="profile-menu">
               <div id="profile-avatar" class="avatar">?</div>
               <div class="profile-copy">
                 <strong id="profile-name">사용자</strong
                 ><span id="profile-role"></span>
               </div>
-              </button>
-              <button id="logout-button" class="text-button" type="button">
-                로그아웃
+              <span class="profile-menu-chevron" aria-hidden="true">⌃</span>
               </button>
             </div>
+            <dialog id="profile-menu" class="profile-menu" aria-label="계정 및 도구">
+              <div class="profile-menu-section">
+                <span class="profile-menu-heading">내 공간</span>
+                <button id="edit-profile-button" class="profile-menu-item" type="button">프로필 꾸미기</button>
+                <button id="create-room-button" class="profile-menu-item" type="button">새 대화</button>
+              </div>
+              <div class="profile-menu-section">
+                <span class="profile-menu-heading">도구</span>
+                <button id="open-dashboard" class="profile-menu-item is-hidden" type="button">대시보드</button>
+                <button id="open-mail" class="profile-menu-item is-hidden" type="button" data-admin-tool>메일</button>
+                <button id="open-capability-hub" class="profile-menu-item is-hidden" type="button" data-admin-tool>통합 관리</button>
+                <button id="open-bot-setup" class="profile-menu-item is-hidden" type="button" data-admin-tool>내 봇 설정</button>
+                <button id="open-routines" class="profile-menu-item" type="button">루틴</button>
+              </div>
+              <div class="profile-menu-section">
+                <button id="site-invite-button" class="profile-menu-item is-hidden" type="button">사용자 초대</button>
+                <button id="install-button" class="profile-menu-item is-hidden" type="button">앱으로 설치</button>
+                <button id="logout-button" class="profile-menu-item" type="button">로그아웃</button>
+              </div>
+            </dialog>
           </div>
         </aside>
         <div id="sidebar-scrim" class="sidebar-scrim"></div>

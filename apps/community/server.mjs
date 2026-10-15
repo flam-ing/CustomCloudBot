@@ -34,6 +34,7 @@ import { BROWSER_TOOL_DEFINITIONS, createBrowserTools } from "./browser-tools.mj
 import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, createUploadLimiter, MAX_DEFAULT } from "./media.mjs";
 import { createVoiceTranscriber, VOICE_MAX_BYTES } from "./voice.mjs";
 import { createMessageQueue } from "./message-queue.mjs";
+import { AVATAR_MAX_BYTES, AVATAR_MIMES, validateAvatarBytes } from "./avatar-media.mjs";
 import { createContinuation, beginTool, finishTool, snapshotContinuation, continuationPrompt } from "./message-continuation.mjs";
 import { createPushService, validateSubscription, validateEndpoint } from "./push.mjs";
 
@@ -160,6 +161,9 @@ export async function startCommunity(options = {}) {
     try { modelUsage.record(roomId,event); } catch {}
   };
   const mediaDir = await prepareMediaDir(dataDir);
+  const avatarDir = join(dataDir, "avatars");
+  mkdirSync(avatarDir, {recursive: true, mode: 0o700});
+  chmodSync(avatarDir, 0o700);
   await cleanupOrphans(db, mediaDir);
   const mediaDailyLimit = Number(env.COMMUNITY_MEDIA_DAILY_BYTES ?? 100 * 1024 * 1024);
   const mediaStorageLimit = Number(env.COMMUNITY_MEDIA_STORAGE_BYTES ?? 1024 * 1024 * 1024);
@@ -309,13 +313,33 @@ export async function startCommunity(options = {}) {
     const saved = db.prepare("SELECT value FROM settings WHERE key=?").get("profile-color:" + userId)?.value;
     return PROFILE_COLORS.has(saved) ? saved : "#6f658e";
   };
+  const avatarGraphemes = new Intl.Segmenter("ko", {granularity: "grapheme"});
+  const normalizeAvatarLabel = value => {
+    if (typeof value !== "string" || value.length > 64 || /[\p{Cc}\p{Bidi_Control}]/u.test(value))
+      throw failure(400, "프로필 아이콘에는 글자나 이모지를 3개까지 입력해 주세요.");
+    const label = value.trim().normalize("NFC");
+    if ([...avatarGraphemes.segment(label)].length > 3)
+      throw failure(400, "프로필 아이콘에는 글자나 이모지를 3개까지 입력해 주세요.");
+    return label;
+  };
+  const profileLabel = userId => db.prepare("SELECT value FROM settings WHERE key=?").get("profile-label:" + userId)?.value || "";
+  const profilePhoto = userId => {
+    try {
+      const value = JSON.parse(db.prepare("SELECT value FROM settings WHERE key=?").get("profile-photo:" + userId)?.value || "null");
+      return value && /^[a-f0-9-]{36}$/.test(value.id) && AVATAR_MIMES.has(value.mime) ? value : null;
+    } catch { return null; }
+  };
+  const avatarShape = userId => {
+    const photo = profilePhoto(userId);
+    return {avatarLabel: profileLabel(userId), avatarColor: profileColor(userId), avatarUrl: photo ? `/api/avatars/${userId}/${photo.id}` : null};
+  };
   const sessionShape = (user) => ({
     user: user
       ? {
           id: user.id,
           username: user.username,
           displayName: user.displayName,
-          avatarColor: profileColor(user.id),
+          ...avatarShape(user.id),
           role: user.role,
           hostAdmin: hostAdmin.authorized(user.id),
         }
@@ -1157,8 +1181,44 @@ export async function startCommunity(options = {}) {
       else if(!/^\/api\/rooms\/[a-f0-9-]{36}\/workspace(?:\/|$)/.test(url.pathname))limit("api:" + user.id, 180);
       const isAttachmentPost = method === "POST" && /^\/api\/rooms\/[a-f0-9-]{36}\/attachments$/.test(url.pathname);
       const isVoicePost = method === "POST" && /^\/api\/rooms\/[a-f0-9-]{36}\/voice\/transcribe$/.test(url.pathname);
-      const needsJsonBody = method === "PATCH" || (method === "PUT" && url.pathname === "/api/sidebar") || (method === "POST" && !isAttachmentPost && !isVoicePost) || (method === "DELETE" && url.pathname === "/api/push/subscriptions");
+      const isAvatarPost = method === "POST" && url.pathname === "/api/profile/avatar";
+      const needsJsonBody = method === "PATCH" || (method === "PUT" && url.pathname === "/api/sidebar") || (method === "POST" && !isAttachmentPost && !isVoicePost && !isAvatarPost) || (method === "DELETE" && url.pathname === "/api/push/subscriptions");
       const body = needsJsonBody ? await readBody(req, url.pathname === "/api/admin/mail/send" ? 65536 : MAX_BODY) : {};
+      const avatarMatch = url.pathname.match(/^\/api\/avatars\/([a-f0-9-]{36})\/([a-f0-9-]{36})$/);
+      if (avatarMatch && ["GET", "HEAD"].includes(method)) {
+        const photo = profilePhoto(avatarMatch[1]);
+        if (!photo || photo.id !== avatarMatch[2]) throw failure(404, "프로필 사진을 찾을 수 없습니다.");
+        const content = await readFile(join(avatarDir, photo.id)).catch(() => null);
+        if (!content) throw failure(404, "프로필 사진을 찾을 수 없습니다.");
+        res.writeHead(200, {"content-type": photo.mime, "content-length": content.length, "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox", "cross-origin-resource-policy": "same-origin"});
+        res.end(method === "HEAD" ? undefined : content); return;
+      }
+      if (url.pathname === "/api/profile/avatar" && ["POST", "DELETE"].includes(method)) {
+        limit("avatar:" + user.id, 20);
+        if (method === "DELETE") {
+          const prior = profilePhoto(user.id);
+          db.prepare("DELETE FROM settings WHERE key=?").run("profile-photo:" + user.id);
+          if (prior) await unlink(join(avatarDir, prior.id)).catch(() => {});
+          return reply(res, 200, {user: sessionShape(user).user});
+        }
+        let upload, stored;
+        try {
+          upload = await receiveAttachment(req, {mediaDir: avatarDir, maxBytes: AVATAR_MAX_BYTES, userId: user.id});
+          const image = validateAvatarBytes(await readFile(upload.tempPath), upload.declaredMime);
+          if (userFor(req)?.sessionHash !== user.sessionHash) throw failure(403, "다시 로그인한 뒤 사진을 저장해 주세요.");
+          const id = randomUUID();
+          stored = await finalizeAttachment(upload, avatarDir, id);
+          if (userFor(req)?.sessionHash !== user.sessionHash) throw failure(403, "다시 로그인한 뒤 사진을 저장해 주세요.");
+          const prior = profilePhoto(user.id);
+          db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("profile-photo:" + user.id, JSON.stringify({id, mime: image.mime}));
+          stored = null;
+          if (prior) await unlink(join(avatarDir, prior.id)).catch(() => {});
+          return reply(res, 200, {user: sessionShape(user).user});
+        } finally {
+          if (upload) await unlink(upload.tempPath).catch(() => {});
+          if (stored) await unlink(stored).catch(() => {});
+        }
+      }
       if (url.pathname === "/api/voice" && method === "GET") return reply(res,200,voice.status());
       const voiceMatch = url.pathname.match(/^\/api\/rooms\/([a-f0-9-]{36})\/voice\/transcribe$/);
       if (voiceMatch && method === "POST") {
@@ -1288,9 +1348,11 @@ export async function startCommunity(options = {}) {
         const displayName = text(body.displayName, 80, true);
         const avatarColor = body.avatarColor ?? profileColor(user.id);
         if (!PROFILE_COLORS.has(avatarColor)) throw failure(400, "프로필 색상을 다시 선택해 주세요.");
+        const avatarLabel = body.avatarLabel === undefined ? profileLabel(user.id) : normalizeAvatarLabel(body.avatarLabel);
         transaction(() => {
           db.prepare("UPDATE users SET display_name=? WHERE id=?").run(displayName, user.id);
           db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("profile-color:" + user.id, avatarColor);
+          db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("profile-label:" + user.id, avatarLabel);
         });
         return reply(res, 200, {user: sessionShape({...user, displayName}).user});
       }
@@ -1836,6 +1898,7 @@ export async function startCommunity(options = {}) {
             .all(room.id).reverse();
         for (const message of messages) {
           if (message.kind !== "human" || message.authorId !== user.id || !message.clientNonceHash) delete message.clientNonceHash;
+          if (message.kind === "human" && message.authorId) Object.assign(message, avatarShape(message.authorId));
           message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id);
         }
         return reply(res, 200, {
@@ -1844,7 +1907,7 @@ export async function startCommunity(options = {}) {
             .prepare(
               "SELECT u.id,u.display_name displayName,m.role FROM room_members m JOIN users u ON m.user_id=u.id WHERE m.room_id=?",
             )
-            .all(room.id),
+            .all(room.id).map(member => ({...member, ...avatarShape(member.id)})),
           messages,
           queue: messageQueue.waiting(room.id).map(item=>{
             const run=activeRuns.get(room.id),own=item.author_id===user.id,mayManage=own||room.member_role==="owner";

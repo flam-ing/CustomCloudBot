@@ -4,7 +4,11 @@
 .profile-settings-header {display:flex;align-items:center;justify-content:space-between;gap:16px}
 .profile-settings-header h2 {font-size:18px;margin:0}.profile-settings-header button {font-size:26px}
 .profile-settings-preview {display:grid;place-items:center;width:78px;height:78px;border-radius:50%;font-size:30px;font-weight:600;margin:0 auto;color:#fff}
+.profile-settings-preview-text {font-size:22px}.profile-settings-preview {overflow:hidden;text-align:center}
+.profile-settings-preview img {width:100%;height:100%;object-fit:cover}
+.profile-settings-photo-controls {display:flex;justify-content:center;flex-wrap:wrap;gap:8px}.profile-settings-photo-controls button {padding:8px 12px;border-radius:12px;font-size:12px}.profile-settings-photo-controls small {flex-basis:100%;text-align:center}
 .profile-settings-field {display:grid;gap:9px;font-size:14px}.profile-settings-field input {width:100%;box-sizing:border-box;border:1px solid #ffffff26;border-radius:12px;padding:12px;background:#ffffff08;color:inherit;font:inherit}
+.profile-settings-hint {font-size:12px;line-height:1.5;opacity:.72}
 .profile-settings-palette {margin:0;padding:0;border:0;display:flex;gap:10px;justify-content:center}.profile-settings-palette legend {font-size:14px;padding:0 0 12px;width:100%}
 .profile-settings-swatch {position:relative;display:block;width:38px;height:38px;cursor:pointer}.profile-settings-swatch input {position:absolute;inset:0;opacity:0;margin:0;width:100%;height:100%;cursor:pointer}
 .profile-settings-swatch span {display:block;width:100%;height:100%;border-radius:50%;background:var(--profile-color);box-shadow:inset 0 0 0 1px #ffffff12;pointer-events:none}

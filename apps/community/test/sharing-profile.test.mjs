@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createHash, randomUUID} from "node:crypto";
-import {mkdtemp, rm} from "node:fs/promises";
+import {mkdtemp, rm, readFile, readdir, stat} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {startCommunity} from "../server.mjs";
@@ -28,7 +28,7 @@ async function fixture(t) {
   async function personal(owner) {return (await call("/api/rooms", owner)).data.rooms.find(item => item.personal);}
   async function send(owner, roomId, text, extra = {}) {const result = await call(`/api/rooms/${roomId}/messages`, owner, {text, botIds: [], clientNonce: randomUUID(), ...extra}); assert.equal(result.status, 202); return result.data;}
   async function joinRoom(owner, member, roomId) {const invite = (await call(`/api/rooms/${roomId}/invites`, owner, {})).data.token; assert.equal((await call("/api/rooms/join", member, {token: invite})).status, 200);}
-  return {app, calls, call, register, room, personal, send, joinRoom};
+  return {app, dir, calls, call, register, room, personal, send, joinRoom};
 }
 
 test("profile customization persists per account and retains authentication, CSRF, and role boundaries", async t => {
@@ -36,13 +36,73 @@ test("profile customization persists per account and retains authentication, CSR
   assert.equal((await f.call("/api/profile", null, {displayName: "changed"})).status, 401);
   assert.equal((await f.call("/api/profile", member, {displayName: "changed"}, false)).status, 403);
   for (const body of [{displayName: " "}, {displayName: "x".repeat(81)}, {displayName: "valid", avatarColor: "url(https://invalid)"}]) assert.equal((await f.call("/api/profile", member, body)).status, 400);
-  const changed = await f.call("/api/profile", member, {displayName: "새 이름", avatarColor: "#427f80", id: owner.id, role: "admin"});
+  const changed = await f.call("/api/profile", member, {displayName: "새 이름", avatarColor: "#427f80", avatarLabel: "민우", id: owner.id, role: "admin"});
   assert.equal(changed.status, 200); assert.equal(changed.data.user.id, member.id); assert.equal(changed.data.user.role, "member");
   const session = (await f.call("/api/session", member)).data;
   assert.equal(session.user.displayName, "새 이름"); assert.equal(session.user.avatarColor, "#427f80");
-  assert.equal((await f.call("/api/session", owner)).data.user.displayName, "profile_owner");
+  assert.equal(session.user.avatarLabel, "민우");
+  const ownerProfile = (await f.call("/api/session", owner)).data.user;
+  assert.equal(ownerProfile.displayName, "profile_owner"); assert.equal(ownerProfile.avatarLabel, "");
   const r = await f.room(member); await f.send(member, r.id, "프로필 확인");
   assert.equal((await f.call(`/api/rooms/${r.id}`, member)).data.messages[0].author, "새 이름");
+});
+
+test("avatar labels count emoji as displayed characters, retain omitted values, and support resetting", async t => {
+  const f = await fixture(t), owner = await f.register("avatar_owner");
+  for (const avatarLabel of [null, 1, {}, "abcd", "가나다라", "x".repeat(65), "a\nb", "a\u202eb"])
+    assert.equal((await f.call("/api/profile", owner, {displayName: "이름", avatarLabel})).status, 400);
+  const label = "👩🏽‍💻☁️";
+  const changed = await f.call("/api/profile", owner, {displayName: "이름", avatarLabel: " " + label + " "});
+  assert.equal(changed.status, 200); assert.equal(changed.data.user.avatarLabel, label);
+  assert.equal(f.app.db.prepare("SELECT value FROM settings WHERE key=?").get("profile-label:" + owner.id).value, label);
+  const renamed = await f.call("/api/profile", owner, {displayName: "새 이름"});
+  assert.equal(renamed.data.user.avatarLabel, label);
+  assert.equal((await f.call("/api/session", owner)).data.user.avatarLabel, label);
+  const cleared = await f.call("/api/profile", owner, {displayName: "새 이름", avatarLabel: "   "});
+  assert.equal(cleared.status, 200); assert.equal(cleared.data.user.avatarLabel, "");
+  assert.equal((await f.call("/api/session", owner)).data.user.avatarLabel, "");
+});
+
+test("profile photos persist per user, render in shared chats, and require authentication and CSRF", async t => {
+  const f = await fixture(t), owner = await f.register("photo_owner"), member = await f.register("photo_member", owner);
+  const bytes = await readFile(new URL("../public/icons/cloud-agent-v1-48.png", import.meta.url));
+  const upload = async (auth, image = bytes, type = "image/png", csrf = true) => {
+    const body = new FormData(); body.append("file", new Blob([image], {type}), "../../photo.png");
+    return fetch(f.app.url + "/api/profile/avatar", {method: "POST", headers: auth ? {cookie: auth.cookie, ...(csrf ? {"x-csrf-token": auth.csrf} : {})} : {}, body});
+  };
+  assert.equal((await upload(null)).status, 401);
+  assert.equal((await upload(owner, bytes, "image/png", false)).status, 403);
+  for (const [image, type, expected] of [[Buffer.from("<svg onload='alert(1)'/>"), "image/svg+xml", 415], [Buffer.from("89504e470d0a1a0a", "hex"), "image/png", 415], [Buffer.alloc(2 * 1024 * 1024 + 1), "image/png", 413]])
+    assert.equal((await upload(owner, image, type)).status, expected);
+  assert.deepEqual(await readdir(join(f.dir, "avatars")), []);
+  await f.call("/api/profile", owner, {displayName: "사진 사용자", avatarLabel: "MW", avatarColor: "#427f80"});
+  const result = await upload(owner); assert.equal(result.status, 200);
+  const photo = (await result.json()).user;
+  assert.match(photo.avatarUrl, new RegExp(`^/api/avatars/${owner.id}/[a-f0-9-]{36}$`));
+  assert.equal(photo.avatarLabel, "MW"); assert.equal(photo.avatarColor, "#427f80");
+  assert.equal((await f.call("/api/session", owner)).data.user.avatarUrl, photo.avatarUrl);
+  assert.equal((await f.call("/api/session", member)).data.user.avatarUrl, null);
+  assert.equal((await fetch(f.app.url + photo.avatarUrl)).status, 401);
+  const read = await fetch(f.app.url + photo.avatarUrl, {headers: {cookie: member.cookie}});
+  assert.equal(read.status, 200); assert.equal(read.headers.get("content-type"), "image/png");
+  assert.equal(read.headers.get("x-content-type-options"), "nosniff"); assert.match(read.headers.get("cache-control"), /no-store/);
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()), bytes);
+  const file = join(f.dir, "avatars", photo.avatarUrl.split("/").at(-1));
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+  const room = await f.room(owner); await f.joinRoom(owner, member, room.id); await f.send(owner, room.id, "사진 확인");
+  const conversation = (await f.call(`/api/rooms/${room.id}`, member)).data;
+  assert.equal(conversation.members.find(item => item.id === owner.id).avatarUrl, photo.avatarUrl);
+  assert.equal(conversation.messages[0].avatarUrl, photo.avatarUrl); assert.equal(conversation.messages[0].avatarLabel, "MW");
+  for (const [path, type] of [["media/agent/idle-poster.jpg", "image/jpeg"], ["media/agent/idle-poster.webp", "image/webp"]]) {
+    const replacement = await upload(owner, await readFile(new URL("../public/" + path, import.meta.url)), type);
+    assert.equal(replacement.status, 200); assert.notEqual((await replacement.json()).user.avatarUrl, photo.avatarUrl);
+    assert.equal((await readdir(join(f.dir, "avatars"))).length, 1);
+  }
+  assert.equal((await fetch(f.app.url + photo.avatarUrl, {headers: {cookie: owner.cookie}})).status, 404);
+  assert.equal((await fetch(f.app.url + "/api/profile/avatar", {method: "DELETE", headers: {cookie: owner.cookie}})).status, 403);
+  const removed = await fetch(f.app.url + "/api/profile/avatar", {method: "DELETE", headers: {cookie: owner.cookie, "x-csrf-token": owner.csrf}});
+  assert.equal(removed.status, 200); assert.equal((await removed.json()).user.avatarUrl, null);
+  assert.deepEqual(await readdir(join(f.dir, "avatars")), []);
 });
 
 test("private rooms offer an explicit empty shared copy with isolated tools and real multi-user conversation", async t => {

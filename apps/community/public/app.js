@@ -142,29 +142,52 @@ const toast = (message) => {
   );
 };
 const initials = (name) => (name || "?").trim().slice(0, 1).toUpperCase();
-function renderAgentLinks() {
-  let links=$("#agent-workspaces");
-  if(!links){links=document.createElement("div");links.id="agent-workspaces";links.className="agent-workspaces";$(".branch-heading").before(links);}
-  links.replaceChildren();
-  const routines=document.createElement("button");routines.type="button";routines.id="open-routines";routines.textContent="루틴";
-  routines.onclick=()=>{
-    const pane=state.focusPane>0?state.extra[state.focusPane-1]:null;
-    const id=pane?.roomId||state.selectedRoom,room=state.rooms.find(item=>item.id===id);
-    if(!room||id===MONITOR_ROOM||room.archived){toast("루틴을 실행할 대화를 먼저 선택해 주세요.");return;}
-    void routineUI?.open(room,{model:pane?.model??$("#model-select").value,effort:pane?.effort??$("#effort-select").value});
-  };links.append(routines);
-  if(state.session?.user?.role==="admin") {
-    const setup=document.createElement("button");setup.type="button";setup.textContent="내 봇 설정";setup.onclick=()=>void setupUI?.open();links.append(setup);
-    const mail=document.createElement("button");mail.type="button";mail.append(icon("mail"));const mailLabel=document.createElement("span");mailLabel.textContent="메일";mail.append(mailLabel);mail.onclick=()=>void mailUI?.open();links.append(mail);
-    const hub=document.createElement("button");hub.textContent="통합 관리";hub.onclick=openCapabilityHub;links.append(hub);
-  }
-  for(const room of state.rooms.filter(r=>!r.archived&&r.id===MONITOR_ROOM)) {
-    const button=document.createElement("button");button.type="button";
-    button.append(icon("activity"));
-    const label=document.createElement("span");label.textContent="대시보드";button.append(label);
-    button.onclick=()=>selectRoom(room.id);links.append(button);
-  }
+function renderUserAvatar(avatar, user, name) {
+  const label=user.avatarLabel || initials(name || user.displayName || user.username);
+  const key=JSON.stringify([label,user.avatarColor,user.avatarUrl]);
+  if(avatar.dataset.profileKey===key)return;
+  avatar.dataset.profileKey=key;
+  avatar.replaceChildren();
+  avatar.style.backgroundColor=user.avatarColor || "";
+  avatar.classList.toggle("avatar-text",[...new Intl.Segmenter("ko",{granularity:"grapheme"}).segment(label)].length>1);
+  if(typeof user.avatarUrl==="string" && /^\/api\/avatars\/[a-zA-Z0-9/-]+$/.test(user.avatarUrl)) {
+    const photo=document.createElement("img");photo.src=user.avatarUrl;photo.alt="";photo.decoding="async";
+    photo.addEventListener("error",()=>{if(avatar.dataset.profileKey===key)avatar.textContent=label;},{once:true});
+    avatar.append(photo);
+  } else avatar.textContent=label;
 }
+function messageProfile(message) {
+  return message.authorId===state.session?.user?.id ? state.session.user : message;
+}
+function renderAccountTools() {
+  const admin=state.session?.user?.role==="admin";
+  $$("[data-admin-tool]",$("#profile-menu")).forEach(button=>button.classList.toggle("is-hidden",!admin));
+  $("#open-dashboard").classList.toggle("is-hidden",!state.rooms.some(room=>room.id===MONITOR_ROOM&&!room.archived));
+}
+function openRoutines() {
+  const pane=state.focusPane>0?state.extra[state.focusPane-1]:null;
+  const id=pane?.roomId||state.selectedRoom,room=state.rooms.find(item=>item.id===id);
+  if(!room||id===MONITOR_ROOM||room.archived){toast("루틴을 실행할 대화를 먼저 선택해 주세요.");return;}
+  void routineUI?.open(room,{model:pane?.model??$("#model-select").value,effort:pane?.effort??$("#effort-select").value});
+}
+function closeProfileMenu() {
+  const menu=$("#profile-menu");
+  if(menu.open)menu.close();
+  $("#profile-customize").setAttribute("aria-expanded","false");
+}
+function toggleProfileMenu() {
+  const menu=$("#profile-menu"),trigger=$("#profile-customize");
+  if(menu.open){closeProfileMenu();return;}
+  renderAccountTools();
+  const rect=trigger.getBoundingClientRect(),bottom=Math.max(12,innerHeight-rect.top+8);
+  menu.style.bottom=bottom+"px";
+  menu.style.maxHeight=Math.max(160,innerHeight-bottom-12)+"px";
+  menu.show();
+  menu.style.left=Math.max(12,Math.min(rect.left,innerWidth-menu.offsetWidth-12))+"px";
+  trigger.setAttribute("aria-expanded","true");
+  $("#edit-profile-button").focus({preventScroll:true});
+}
+
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("class", "icon");
@@ -268,7 +291,6 @@ function showAuth() {
   els.memberList.replaceChildren();
   els.roomList.replaceChildren();
   $("#message-input").value = "";
-  $("#room-search").value = "";
   els.memberPanel.classList.remove("is-open");
   closeSidebar();
   $$("dialog[open]").forEach((dialog) => dialog.close());
@@ -287,10 +309,7 @@ async function enterWorkspace() {
   $("#profile-name").textContent = user.displayName || user.username;
   $("#profile-role").textContent =
     user.role === "admin" ? "사이트 관리자" : "멤버";
-  $("#profile-avatar").textContent = initials(
-    user.displayName || user.username,
-  );
-  $("#profile-avatar").style.backgroundColor = user.avatarColor || "";
+  renderUserAvatar($("#profile-avatar"),user);
   $("#site-invite-button").classList.toggle("is-hidden", user.role !== "admin");
   renderModelConnection();
   notificationUI?.setSession(state.session);
@@ -557,10 +576,9 @@ function branchSvg(tag, attributes = {}) {
 }
 function renderRooms() {
   const focus = els.roomList.contains(document.activeElement) ? {roomId: document.activeElement.dataset.roomId, action: document.activeElement.dataset.branchAction} : null;
-  renderAgentLinks(); els.roomList.replaceChildren(); updateBranchControls();
-  const query = $("#room-search").value.trim().toLocaleLowerCase();
+  renderAccountTools(); els.roomList.replaceChildren(); updateBranchControls();
   if (showDeletedRooms) {
-    const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM && [room.name, room.description].join(" ").toLocaleLowerCase().includes(query));
+    const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM);
     for (const room of archived) {
       const row = document.createElement("div"); row.className = "branch-archive-row";
       const button = sidebarRoomButton(room), restore = document.createElement("button");
@@ -570,7 +588,7 @@ function renderRooms() {
     }
     if (!archived.length) { const empty = document.createElement("p"); empty.className = "search-empty"; empty.textContent = "보관된 가지가 없습니다."; els.roomList.append(empty); }
   } else {
-    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {query});
+    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks);
     const graphList = document.createElement("div"); graphList.className = "branch-graph";
     const width = Math.min(72, Math.max(30, graph.laneCount * 13 + 12)), step = graph.laneCount > 1 ? (width - 18) / (graph.laneCount - 1) : 0;
     graphList.style.setProperty("--branch-rail", width + "px");
@@ -597,7 +615,7 @@ function renderRooms() {
       graphList.append(button);
     }
     graphList.prepend(svg); els.roomList.append(graphList);
-    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=query?"검색 결과가 없습니다.":"+ 버튼으로 새 줄기를 시작하세요.";els.roomList.append(empty); }
+    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent="아래 계정 메뉴에서 새 대화를 시작하세요.";els.roomList.append(empty); }
   }
   const footer=document.createElement("div");footer.className="branch-list-footer";
   const trash=document.createElement("button");trash.className="deleted-rooms-toggle";trash.type="button";trash.dataset.branchAction="archive";trash.textContent=showDeletedRooms?"← 가지로 돌아가기":"보관한 가지"+(state.rooms.some(room=>room.archived)?" ("+state.rooms.filter(room=>room.archived).length+")":"");trash.onclick=()=>{showDeletedRooms=!showDeletedRooms;renderRooms();};
@@ -805,7 +823,11 @@ function renderRoom(data) {
     empty.append(title, note);
     els.messages.append(empty);
   } else
-    messages.forEach((message) => els.messages.append((!message.pending && !previousNodes.get(message.id)?.dataset.pending ? previousNodes.get(message.id) : null) || createMessage(message, null, data.room.id)));
+    messages.forEach(message=>{
+      const node=(!message.pending && !previousNodes.get(message.id)?.dataset.pending ? previousNodes.get(message.id) : null) || createMessage(message,null,data.room.id);
+      if(message.kind==="human")renderUserAvatar($(".avatar",node),messageProfile(message),message.author);
+      els.messages.append(node);
+    });
   const members = data.members || [];
   els.memberCount.textContent = members.length;
   els.memberList.replaceChildren();
@@ -814,7 +836,7 @@ function renderRoom(data) {
     row.className = "member-row";
     const avatar = document.createElement("span");
     avatar.className = `avatar ${member.role === "owner" || member.role === "admin" ? "avatar-accent" : ""}`;
-    avatar.textContent = initials(member.displayName);
+    renderUserAvatar(avatar,member);
     const copy = document.createElement("span");
     copy.className = "member-copy";
     const name = document.createElement("strong");
@@ -997,7 +1019,7 @@ function createMessage(message, pane = null, roomId = state.selectedRoom) {
   if(message.id && Date.now()-message.createdAt<15000 && !animatedMessages.has(message.id)){article.classList.add("message-enter");animatedMessages.add(message.id);if(animatedMessages.size>500)animatedMessages.delete(animatedMessages.values().next().value);}
   const avatar = document.createElement("div");
   avatar.className = `avatar ${message.kind === "bot" ? "avatar-bot" : ""}`;
-  if (message.kind !== "bot") avatar.textContent = initials(message.author);
+  if (message.kind !== "bot") renderUserAvatar(avatar,messageProfile(message),message.author);
   const body = document.createElement("div");
   body.className = "message-body";
   const meta = document.createElement("div");
@@ -1427,7 +1449,7 @@ let creatingSession=false;
 async function startNewSession() {
   if(creatingSession)return;creatingSession=true;
   const userId=state.session?.user?.id,epoch=sidebarEpoch,current=()=>state.session?.user?.id===userId&&sidebarEpoch===epoch;
-  try {const data=await api("/api/rooms",{method:"POST",body:JSON.stringify({})});if(!current())return;await loadRooms();if(!current())return;state.focusPane=0;await selectRoom(data.room.id);$("#message-input").focus();}
+  try {const data=await api("/api/rooms",{method:"POST",body:JSON.stringify({})});if(!current())return;await loadRooms();if(!current())return;state.focusPane=0;await selectRoom(data.room.id);if(!current())return;closeSidebar();$("#message-input").focus();}
   catch(error){if(current())toast(error.message);}finally{creatingSession=false;}
 }
 async function resetConversations(button, dialog = null) {
@@ -1438,7 +1460,7 @@ async function resetConversations(button, dialog = null) {
     const data=await api("/api/sessions/reset",{method:"POST",body:"{}"});
     if(state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;
     dialog?.close();stopProgressStreams();if(state.layout>1)setLayout(state.layout);
-    dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();showDeletedRooms=false;$("#room-search").value="";$("#message-input").value="";state.pendingSend=null;pendingMessages.clear();clearPendingAttachments();
+    dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();showDeletedRooms=false;$("#message-input").value="";state.pendingSend=null;pendingMessages.clear();clearPendingAttachments();
     await loadRooms();if(state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;await selectRoom(data.room.id);
     toast(`${data.archived||0}개 가지를 보관하고 새 줄기를 시작했습니다.`);
   } catch(error){if(state.session?.user?.id===userId&&sidebarEpoch===epoch)toast(error.message);}
@@ -1489,7 +1511,7 @@ function branchDestination(pane = null, explicit = false) {
 }
 async function openBranchResult(data, destination) {
   await loadRooms(); if(!destination.current())return;
-  showDeletedRooms=false;$("#room-search").value="";
+  showDeletedRooms=false;
   if(destination.pane)assignExtra(state.extra.indexOf(destination.pane),data.room.id);else await selectRoom(data.room.id);
   renderRooms();closeSidebar();
   toast(data.contextTruncated?"맥락이 길어 일부만 이어받았습니다. 원본 가지에서 전체 기록을 볼 수 있어요.":"새 가지를 만들었습니다. 원본은 그대로 남습니다.");
@@ -1721,6 +1743,7 @@ async function makeInvite(path, title) {
   }
 }
 function closeSidebar() {
+  closeProfileMenu();
   $("#sidebar").classList.remove("is-open");
   $("#sidebar-scrim").classList.remove("is-visible");
 }
@@ -2164,22 +2187,11 @@ function assignExtra(index, roomId) {
 }
 function bind() {
   setupSidebarResize();
+  document.body.append($("#profile-menu"));
   $("#create-sidebar-group").addEventListener("click",()=>openSidebarGroupEditor());
   $("#branch-fork").addEventListener("click",()=>void sessionAction("fork",null,$("#branch-fork"),null,null,currentBranchId()));
   $("#branch-merge").addEventListener("click",()=>mergeBranch(currentBranchId()));
-  $("#room-search").addEventListener("input", renderRooms);
   document.addEventListener("keydown", (event) => {
-    if (
-      event.key === "/" &&
-      state.session?.user &&
-      !event.target.matches("input, textarea") &&
-      !document.querySelector("dialog[open]")
-    ) {
-      event.preventDefault();
-      $("#sidebar").classList.add("is-open");
-      $("#sidebar-scrim").classList.add("is-visible");
-      $("#room-search").focus();
-    }
     if (event.key === "Escape") {
       $("#bot-picker").classList.add("is-hidden");
       $("#bot-picker-button").setAttribute("aria-expanded", "false");
@@ -2276,7 +2288,25 @@ function bind() {
     els.memberPanel.classList.remove("is-open"),
   );
   $("#room-invite-button").addEventListener("click", () => sharingUI?.open(state.roomData?.room || state.rooms.find(room=>room.id===state.selectedRoom)));
-  $("#profile-customize").addEventListener("click", () => profileUI?.open());
+  $("#profile-customize").addEventListener("click", toggleProfileMenu);
+  $("#profile-menu").addEventListener("close",()=>$("#profile-customize").setAttribute("aria-expanded","false"));
+  document.addEventListener("pointerdown",event=>{
+    if(!event.target.closest("#profile-menu, #profile-customize"))closeProfileMenu();
+  });
+  $("#profile-menu").addEventListener("click",event=>{
+    if(event.target.closest("button:not(:disabled)")){closeProfileMenu();$("#profile-customize").focus({preventScroll:true});}
+  },true);
+  $("#profile-menu").addEventListener("keydown",event=>{
+    if(event.key!=="Escape")return;
+    event.preventDefault();event.stopPropagation();closeProfileMenu();$("#profile-customize").focus();
+  });
+  window.addEventListener("resize",closeProfileMenu);
+  $("#edit-profile-button").addEventListener("click",()=>profileUI?.open());
+  $("#open-routines").addEventListener("click",openRoutines);
+  $("#open-bot-setup").addEventListener("click",()=>void setupUI?.open());
+  $("#open-mail").addEventListener("click",()=>void mailUI?.open());
+  $("#open-capability-hub").addEventListener("click",openCapabilityHub);
+  $("#open-dashboard").addEventListener("click",()=>{closeSidebar();void selectRoom(MONITOR_ROOM);});
   $("#site-invite-button").addEventListener("click", () =>
     makeInvite("/api/admin/invites", "site"),
   );
@@ -2328,7 +2358,10 @@ agentPresence = createAgentPresence({ mount: $("#agent-presence") });
 notificationUI = createNotificationCenter({ mount: $("#notification-center"), openRoom: async id => { await loadRooms(); await selectRoom(id); }, toast });
 pwaUI = createPwaController({ api, getSession: () => state.session, toast });
 desktopUI = createDesktopUI({ api, getRoomId: () => state.selectedRoom, getRoomName: id => state.rooms.find(room=>room.id===id)?.name || "대화", toast });
-profileUI = createProfileSettings({api,getSession:()=>state.session,toast,onSaved: user=>{state.session.user=user;$("#profile-name").textContent=user.displayName;$("#profile-avatar").textContent=initials(user.displayName);$("#profile-avatar").style.backgroundColor=user.avatarColor || "";}});
+profileUI = createProfileSettings({api,getSession:()=>state.session,toast,onSaved: user=>{
+  state.session.user=user;$("#profile-name").textContent=user.displayName;renderUserAvatar($("#profile-avatar"),user);
+  if(state.roomData)renderRoom(state.roomData);refreshExtras();
+}});
 routineUI = createRoutineUI({api,getSession:()=>state.session,getRoom:()=>state.rooms.find(room=>room.id===currentBranchId()),toast,onChanged:async()=>{await refreshRoom(true);await loadRooms();refreshExtras();}});
 messageQueueUI = createMessageQueue({api, getSession:()=>state.session, toast, onRefresh:async roomId=>{
   const tasks=[];
