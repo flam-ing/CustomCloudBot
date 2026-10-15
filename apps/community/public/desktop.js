@@ -8,6 +8,8 @@ const raisePanel=panel=>{const index=stack.indexOf(panel);if(index>=0)stack.spli
 const dropPanel=panel=>{const index=stack.indexOf(panel);if(index>=0){stack.splice(index,1);restack();}};
 // Phones open the window as a full-screen sheet; it cannot be dragged or resized there.
 const sheetQuery=globalThis.matchMedia?.('(max-width: 720px)');
+// A moved window stops below the top bar so its buttons (sidebar toggle, pane bar) stay reachable.
+const TOP_RESERVE=52;
 const isSheet=()=>!!sheetQuery?.matches;
 // Keep a new window above the composer so people can keep typing while it is open.
 function composerReserve() {
@@ -87,9 +89,9 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
   const setMaximized=()=>{isMaximized=!isMaximized;setMaximizeButton();fit();};
   let drag=null;
   const pointerDown=event=>{if(event.button!==0||isSheet()||event.target.closest('button')&&event.currentTarget!==resize)return;event.preventDefault();raise();restore();drag={target:event.currentTarget,id:event.pointerId,x:event.clientX,y:event.clientY,...geometry,resize:event.currentTarget===resize};drag.target.setPointerCapture?.(event.pointerId);};
-  const pointerMove=event=>{if(!drag||event.pointerId!==drag.id)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;layout(drag.resize?{...drag,width:drag.width+dx,height:drag.height+dy}:{...drag,left:drag.left+dx,top:drag.top+dy});};
+  const pointerMove=event=>{if(!drag||event.pointerId!==drag.id)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;layout(drag.resize?{...drag,width:drag.width+dx,height:drag.height+dy}:{...drag,left:drag.left+dx,top:Math.max(TOP_RESERVE,drag.top+dy)});};
   const pointerUp=event=>{if(drag&&event.pointerId===drag.id){try{drag.target.releasePointerCapture?.(event.pointerId);}catch{}drag=null;}};
-  for(const target of [head,resize]){target.addEventListener('pointerdown',pointerDown);target.addEventListener('pointermove',pointerMove);target.addEventListener('pointerup',pointerUp);target.addEventListener('pointercancel',pointerUp);target.addEventListener('keydown',event=>{if(event.target!==target||isSheet()||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();restore();const amount=event.shiftKey?40:10,dx=event.key==='ArrowLeft'?-amount:event.key==='ArrowRight'?amount:0,dy=event.key==='ArrowUp'?-amount:event.key==='ArrowDown'?amount:0;layout(target===resize?{...geometry,width:geometry.width+dx,height:geometry.height+dy}:{...geometry,left:geometry.left+dx,top:geometry.top+dy});});}
+  for(const target of [head,resize]){target.addEventListener('pointerdown',pointerDown);target.addEventListener('pointermove',pointerMove);target.addEventListener('pointerup',pointerUp);target.addEventListener('pointercancel',pointerUp);target.addEventListener('keydown',event=>{if(event.target!==target||isSheet()||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();restore();const amount=event.shiftKey?40:10,dx=event.key==='ArrowLeft'?-amount:event.key==='ArrowRight'?amount:0,dy=event.key==='ArrowUp'?-amount:event.key==='ArrowDown'?amount:0;layout(target===resize?{...geometry,width:geometry.width+dx,height:geometry.height+dy}:{...geometry,left:geometry.left+dx,top:Math.max(TOP_RESERVE,geometry.top+dy)});});}
   setMaximizeButton();maximize.onclick=setMaximized;head.ondblclick=event=>{if(!event.target.closest('button')&&!isSheet())setMaximized();};panel.addEventListener('pointerdown',raise);panel.addEventListener('focusin',raise);
   const tabs=el('div',undefined,'workspace-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','작업 공간 보기');
   const buttons=new Map();

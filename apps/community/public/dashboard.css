@@ -3,6 +3,10 @@
 
 /* ---- Layers: workspace windows (30-39) stay below drawers, toasts and dialogs. */
 .toast { z-index: var(--z-toast, 70); }
+/* The 참여자 panel is a drawer too. */
+.member-panel { z-index: var(--z-drawer, 50); }
+/* The bot picker opens upward from the composer, into the space a window may use; lift the composer only while it is open. */
+#composer-form:has(#bot-picker:not(.is-hidden)) { z-index: calc(var(--z-workspace, 30) + 10); }
 @media (max-width: 720px) {
   .sidebar { z-index: var(--z-drawer, 50); }
   .sidebar-scrim.is-visible { z-index: calc(var(--z-drawer, 50) - 1); }
@@ -74,7 +78,8 @@
 .host-filesystem progress { grid-column: 1 / -1; height: 6px; }
 .host-updated { margin: 16px 0 0; color: var(--muted, #606679); font-size: var(--fs-sm, 13px); }
 /* When updates stop, the last numbers stay but read as old. */
-.host-dashboard.is-stale :is(.host-cards, .host-storage) { opacity: .5; filter: saturate(.35); }
+/* Gray rather than faint, so the old numbers stay readable (small text keeps about 4:1). */
+.host-dashboard.is-stale :is(.host-cards, .host-storage) { opacity: .78; filter: grayscale(1); }
 @media (max-width: 720px) {
   .host-dashboard { padding: 64px 16px 32px; }
   .host-cards { grid-template-columns: 1fr; gap: 10px; }
