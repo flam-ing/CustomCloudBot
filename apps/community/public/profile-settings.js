@@ -31,7 +31,7 @@ export function createProfileSettings({api, getSession, onSaved, toast}) {
     const current = () => active === generation && dialog.open && getSession()?.user?.id === userId;
     const form = element("form", "profile-settings-form");
     const header = element("header", "profile-settings-header");
-    const title = element("h2", "", "프로필 커스터마이징"); title.id = "profile-settings-title";
+    const title = element("h2", "", "프로필 꾸미기"); title.id = "profile-settings-title";
     const exit = element("button", "icon-button", "×"); exit.type = "button"; exit.setAttribute("aria-label", "프로필 설정 닫기"); exit.addEventListener("click", close);
     header.append(title, exit);
     const preview = element("div", "profile-settings-preview"); preview.setAttribute("aria-hidden", "true");

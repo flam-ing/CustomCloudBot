@@ -14,3 +14,16 @@
 .profile-settings-swatch span {display:block;width:100%;height:100%;border-radius:50%;background:var(--profile-color);box-shadow:inset 0 0 0 1px #ffffff12;pointer-events:none}
 .profile-settings-swatch input:checked+span {outline:2px solid #fff;outline-offset:3px}.profile-settings-swatch input:focus-visible+span {outline:3px solid #c5b5ee;outline-offset:4px}
 .profile-settings-account {margin:0;color:#96939e;font-size:13px}.profile-settings-status {margin:0;font-size:13px;color:#f0a5ae}.profile-settings-status:empty {display:none}
+/* Light glass theme: plain sizes, readable hints and comfortable touch targets. */
+.profile-settings-header h2 {font-size:var(--fs-xl,18px);font-weight:var(--fw-semibold,600)}
+.profile-settings-header button {display:grid;place-items:center;width:40px;height:40px;margin:-8px -8px -8px 0;border-radius:12px;color:var(--muted,#606679);background:transparent}
+.profile-settings-header button:hover {background:var(--hover,rgba(126,96,180,.08));color:var(--text,#2e3242)}
+.profile-settings-hint {font-size:var(--fs-xs,12px);color:var(--muted,#606679);opacity:1}
+.profile-settings-form .primary-button {min-height:44px;border-radius:var(--radius-md,12px);font-size:var(--fs-md,14px)}
+.profile-settings-photo-controls button {min-height:36px}
+.profile-settings-field input:focus-visible {outline-offset:1px}
+@media (pointer:coarse) {
+  .profile-settings-palette {gap:8px;flex-wrap:wrap}
+  .profile-settings-swatch {width:44px;height:44px}
+  .profile-settings-photo-controls button {min-height:var(--tap,44px)}
+}

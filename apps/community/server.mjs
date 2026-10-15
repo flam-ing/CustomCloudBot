@@ -1109,6 +1109,7 @@ export async function startCommunity(options = {}) {
           "/tokens.css": ["tokens.css", "text/css"],
           "/messages.css": ["messages.css", "text/css"],
           "/navigation.css": ["navigation.css", "text/css"],
+          "/navigation.mjs": ["navigation.mjs", "text/javascript"],
           "/composer.css": ["composer.css", "text/css"],
           "/dashboard.css": ["dashboard.css", "text/css"],
           "/composer-attachments.mjs": ["composer-attachments.mjs", "text/javascript"],

@@ -48,6 +48,11 @@
 <symbol id="i-plus" viewBox="0 0 24 24">
         <path d="M12 5v14M5 12h14" />
       </symbol>
+      <symbol id="i-more" viewBox="0 0 24 24">
+        <circle cx="6" cy="12" r="1.5" fill="currentColor" stroke="none" />
+        <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+        <circle cx="18" cy="12" r="1.5" fill="currentColor" stroke="none" />
+      </symbol>
       <symbol id="i-search" viewBox="0 0 24 24">
         <circle cx="10.5" cy="10.5" r="6.5" />
         <path d="m16 16 4 4" />
@@ -193,19 +198,28 @@
         </div>
       </section>
       <section id="workspace-view" class="workspace-view is-hidden">
-        <aside id="sidebar" class="sidebar" aria-label="대화 목록">
+        <aside id="sidebar" class="sidebar" aria-label="대화 목록" tabindex="-1">
           <div id="sidebar-resizer" class="sidebar-resizer" role="separator" tabindex="0" aria-label="대화 목록 너비 조절" aria-controls="sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="420" aria-valuenow="280" aria-disabled="true"></div>
-          <div class="sidebar-top mobile-only">
-            <div class="sidebar-actions">
-              <button
-                id="mobile-close"
-                class="icon-button mobile-only"
-                type="button"
-                aria-label="메뉴 닫기"
-              >
-                <svg class="icon"><use href="#i-close" /></svg>
-              </button>
-            </div>
+          <div class="sidebar-top">
+            <button id="create-room-button" class="sidebar-new" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>새 대화</span>
+            </button>
+            <button id="room-search-toggle" class="sidebar-tool" type="button" aria-label="대화 찾기" title="대화 찾기" aria-expanded="false" aria-controls="room-search-field">
+              <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+            </button>
+            <button
+              id="mobile-close"
+              class="sidebar-tool mobile-only"
+              type="button"
+              aria-label="대화 목록 닫기"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+            </button>
+          </div>
+          <div id="room-search-field" class="sidebar-search" role="search" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+            <input id="room-search" type="search" placeholder="대화 이름으로 찾기" aria-label="대화 이름으로 찾기" autocomplete="off" enterkeyhint="search" />
+            <button id="room-search-close" type="button" aria-label="찾기 닫기"><svg class="icon" aria-hidden="true"><use href="#i-close" /></svg></button>
           </div>
           <div class="sidebar-heading branch-heading"><span>가지</span><div class="branch-heading-actions"><button id="branch-fork" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-fork" /></svg>Fork</button><button id="branch-merge" type="button" disabled>Merge</button></div><button id="create-sidebar-group" type="button" hidden disabled>+ 그룹</button></div>
           <p id="branch-current" class="branch-current">새 줄기에서 시작하세요</p>
@@ -225,7 +239,6 @@
               <div class="profile-menu-section">
                 <span class="profile-menu-heading">내 공간</span>
                 <button id="edit-profile-button" class="profile-menu-item" type="button">프로필 꾸미기</button>
-                <button id="create-room-button" class="profile-menu-item" type="button">새 대화</button>
                 <button id="restore-conversations" class="profile-menu-item" type="button">대화 복원</button>
               </div>
               <div class="profile-menu-section">
@@ -252,13 +265,17 @@
               id="mobile-menu"
               class="icon-button"
               type="button"
-              aria-label="사이드바 접기/펼치기" aria-expanded="true"
+              aria-label="대화 목록" aria-controls="sidebar" aria-expanded="true"
             >
               <svg class="icon"><use href="#i-menu" /></svg>
             </button>
             <div class="header-identity">
               <h1 id="room-title">대화</h1>
             </div>
+            <button id="room-info-button" class="room-info-button" type="button" aria-controls="member-panel" aria-expanded="false">
+              <span id="room-info-title" class="room-info-title">대화</span>
+              <span class="room-info-meta"><span id="room-info-meta"></span><span class="room-info-demo">데모 · 실제 AI 미연결</span></span>
+            </button>
             </div>
             <div id="agent-presence" class="agent-presence" aria-label="에이전트"></div>
             <span id="mobile-room-title" class="sr-only"></span
@@ -274,6 +291,8 @@
                 class="icon-button members-button"
                 type="button"
                 aria-label="참여자 보기"
+                aria-controls="member-panel"
+                aria-expanded="false"
                 title="참여자"
               >
                 <svg class="icon" aria-hidden="true"><use href="#i-people" /></svg><span id="member-count">0</span></button
@@ -291,7 +310,7 @@
             </div>
           </header>
           <div id="pane-grid" class="pane-grid" data-panes="1">
-          <section id="empty-state" class="empty-state">
+          <section id="empty-state" class="empty-state is-hidden">
             <h2>새 대화</h2>
             <p>대화를 만들어 시작하세요.</p>
             <button
@@ -405,20 +424,32 @@
           </section>
           </div>
         </main>
-        <aside id="member-panel" class="member-panel" aria-label="대화 참여자">
+        <div id="member-scrim" class="member-scrim"></div>
+        <aside id="member-panel" class="member-panel" aria-labelledby="member-panel-title" tabindex="-1">
           <div class="member-panel-head">
-            <h2>참여자</h2>
+            <h2 id="member-panel-title">대화 정보</h2>
             <button
               id="member-close"
               class="icon-button"
               type="button"
-              aria-label="참여자 패널 닫기"
+              aria-label="대화 정보 닫기"
             >
-              <svg class="icon"><use href="#i-close" /></svg>
+              <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
             </button>
           </div>
-          <p id="room-description" class="room-description"></p>
-          <div id="member-list" class="member-list"></div>
+          <div class="member-room">
+            <strong id="member-room-name" class="member-room-name"></strong>
+            <p id="room-description" class="room-description"></p>
+          </div>
+          <div class="member-section-head">
+            <h3 id="member-heading">참여자</h3><span id="member-total" class="member-total"></span>
+          </div>
+          <label id="member-search-field" class="member-search" hidden>
+            <span class="sr-only">참여자 이름으로 찾기</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+            <input id="member-search" type="search" placeholder="이름으로 찾기" autocomplete="off" />
+          </label>
+          <div id="member-list" class="member-list" role="list" aria-labelledby="member-heading"></div>
         </aside>
       </section>
     </div>

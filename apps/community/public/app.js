@@ -14,6 +14,7 @@ import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
 import { layoutBranches } from "/branch-graph.mjs";
+import { createMenu, createNavigationShell, sortMembers, filterMembers, memberRoleLabel, branchRowMeta, handleMenuKeys } from "/navigation.mjs";
 import { sessionColors } from "/session-colors.js";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
@@ -89,6 +90,7 @@ const els = {
   sendingStatus: $("#sending-status"),
   toast: $("#toast"),
 };
+const nav = createNavigationShell({ workspace: els.workspace, sidebar: $("#sidebar"), sidebarScrim: $("#sidebar-scrim"), main: $(".main-panel"), memberPanel: els.memberPanel, memberScrim: $("#member-scrim"), toggle: $("#mobile-menu") });
 const api = async (path, options = {}, retry = 0) => {
   const isFormData = options.body instanceof FormData;
   const headers = {
@@ -296,7 +298,7 @@ function showAuth() {
   els.memberList.replaceChildren();
   els.roomList.replaceChildren();
   $("#message-input").value = "";
-  els.memberPanel.classList.remove("is-open");
+  nav.closeMembers({ restoreFocus: false });
   closeSidebar();
   $$("dialog[open]").forEach((dialog) => dialog.close());
   $("#invite-token").textContent = "";
@@ -367,6 +369,7 @@ async function loadRooms() {
     }
     els.usage.textContent = "";
     els.usage.title = data.usage ? `앱의 하루 호출 사용량 ${data.usage.used} / ${data.usage.limit}회 · 공급자 잔여량과 별개` : "";
+    roomsState = "ready";
     renderRooms();
     renderBotPicker();
     const activeRooms = state.rooms.filter(room => !room.archived && room.id !== MONITOR_ROOM);
@@ -379,10 +382,12 @@ async function loadRooms() {
     }
     voiceUI?.handleLink();
   } catch (error) {
-    if(userId===state.session?.user?.id&&epoch===sidebarEpoch)toast(error.message);
+    if(userId===state.session?.user?.id&&epoch===sidebarEpoch){toast(error.message);if(roomsState!=="ready"){roomsState="failed";renderRooms();}}
   }
 }
 let showDeletedRooms=false;
+// The list shows placeholders until the first answer, so an empty list is never shown by mistake.
+let roomsState="loading",roomQuery="";
 let sidebarState={userId:null,groups:[],roomOrder:[],width:280,loaded:false};
 let sidebarConfirmed={groups:[],roomOrder:[],width:280};
 let sidebarEpoch=0,sidebarRevision=0,sidebarWriteQueue=Promise.resolve();
@@ -400,10 +405,10 @@ function applySidebarWidth() {
   handle.setAttribute("aria-disabled",String(!sidebarState.loaded));
 }
 function resetSidebarState(userId=null) {
-  sidebarEpoch+=1;sidebarRevision=0;showDeletedRooms=false;
+  sidebarEpoch+=1;sidebarRevision=0;showDeletedRooms=false;roomsState="loading";
   clearTimeout(sidebarWidthTimer);sidebarWidthTimer=null;sidebarPreviewWidth=null;
   sidebarState={userId,groups:[],roomOrder:[],width:280,loaded:false};sidebarConfirmed={groups:[],roomOrder:[],width:280};
-  els.workspace.classList.remove("sidebar-resizing","sidebar-collapsed");applySidebarWidth();
+  els.workspace.classList.remove("sidebar-resizing","sidebar-collapsed");applySidebarWidth();nav.syncToggle();
   $("#create-sidebar-group").disabled=true;
 }
 function sidebarConfig(value) {
@@ -605,8 +610,23 @@ function renderRooms() {
       row.append(button, restore); els.roomList.append(row);
     }
     if (!archived.length) { const empty = document.createElement("p"); empty.className = "search-empty"; empty.textContent = "보관된 가지가 없습니다."; els.roomList.append(empty); }
+  } else if (roomsState !== "ready") {
+    els.roomList.setAttribute("aria-busy", String(roomsState === "loading"));
+    if (roomsState === "loading") {
+      const placeholder = document.createElement("div"); placeholder.className = "branch-placeholder"; placeholder.setAttribute("aria-hidden", "true");
+      for (let index = 0; index < 4; index += 1) { const row = document.createElement("span"); row.className = "branch-placeholder-row"; row.append(document.createElement("i"), document.createElement("i")); placeholder.append(row); }
+      const label = document.createElement("p"); label.className = "sr-only"; label.setAttribute("role", "status"); label.textContent = "대화 목록을 불러오는 중";
+      els.roomList.append(placeholder, label);
+    } else {
+      const failed = document.createElement("div"); failed.className = "branch-load-error"; failed.setAttribute("role", "alert");
+      const note = document.createElement("p"); note.textContent = "대화 목록을 불러오지 못했어요.";
+      const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "다시 시도"; retry.dataset.branchAction = "retry";
+      retry.onclick = () => { roomsState = "loading"; renderRooms(); void loadRooms(); };
+      failed.append(note, retry); els.roomList.append(failed);
+    }
   } else {
-    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder});
+    els.roomList.removeAttribute("aria-busy");
+    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder, query:roomQuery});
     const graphList = document.createElement("div"); graphList.className = "branch-graph";
     const width = Math.min(72, Math.max(30, graph.laneCount * 13 + 12)), step = graph.laneCount > 1 ? (width - 18) / (graph.laneCount - 1) : 0;
     graphList.style.setProperty("--branch-rail", width + "px");
@@ -621,22 +641,24 @@ function renderRooms() {
     for (const row of graph.rows) {
       const active = currentBranchId() === row.id;
       svg.append(branchSvg("circle", {cx:x(row), cy:y(row), r:active?5:3.5, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node branch-color-${row.lane % 3}${active?" is-selected":""}`}));
+      const item = document.createElement("div"); item.className = "branch-item";
       const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
       button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
       const copy=document.createElement("span"); copy.className="branch-row-copy";
-      const name=document.createElement("strong"); name.textContent=(row.room.pinned?"· ":"")+row.room.name;
+      const name=document.createElement("strong"); name.textContent=row.room.name;
       const meta=document.createElement("small"), parentNames=row.parents.map(id=>byId.get(id)?.room.name).filter(Boolean);
-      const relation=row.operation==="merge"?"Merge":row.operation==="fork"?"Fork":"줄기";
-      meta.textContent=relation+(parentNames.length?" · "+parentNames.join(" + "):"")+(row.room.pinned?" · 고정":"");
-      button.title = "드래그: 목록 사이에서 순서 이동 · 제목 위에서 Merge · 대화 영역에서 분할";
+      meta.textContent=branchRowMeta({operation:row.operation, parentNames, room:row.room});
+      button.title = "끌어서 순서 이동 · 다른 대화 위에 놓으면 Merge · 대화 화면에 놓으면 나란히 보기";
       button.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
-      button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":""}`);
+      button.setAttribute("aria-label", `${row.room.name}${meta.textContent?", "+meta.textContent:""}${active?", 지금 보는 대화":""}`);
       copy.append(name,meta); button.append(copy); paintSession(button, colors.get(row.id));
       button.onclick=()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,row.id);else void selectRoom(row.id);closeSidebar();};
-      graphList.append(button);
+      const more = document.createElement("button"); more.type = "button"; more.className = "branch-more"; more.dataset.roomId = row.id; more.dataset.branchAction = "menu";
+      more.setAttribute("aria-haspopup", "menu"); more.setAttribute("aria-expanded", "false"); more.setAttribute("aria-label", `${row.room.name} 메뉴`); more.title = "메뉴"; more.append(icon("more"));
+      item.append(button, more); graphList.append(item);
     }
     graphList.prepend(svg); els.roomList.append(graphList);
-    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent="아래 계정 메뉴에서 새 대화를 시작하세요.";els.roomList.append(empty); }
+    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=roomQuery.trim()?`‘${roomQuery.trim()}’ 검색 결과가 없어요.`:"아직 대화가 없어요. 위의 ‘새 대화’로 시작해 보세요.";els.roomList.append(empty); }
   }
   syncSessionColors(colors);
   if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
@@ -666,6 +688,7 @@ function showEmpty() {
   stopPolling();
   els.empty.classList.remove("is-hidden");
   els.roomView.classList.add("is-hidden");
+  nav.closeMembers({ restoreFocus: false });
   $("#room-invite-button").classList.add("is-hidden");
   els.mobileRoomTitle.textContent = "대화를 선택하세요";
   renderRooms();
@@ -696,8 +719,10 @@ async function selectRoom(id) {
   clearPendingAttachments();
   desktopUI?.setRoom(id);
   els.messages.replaceChildren();
-  els.memberList.replaceChildren();
-  els.memberCount.textContent = "0";
+  els.messages.setAttribute("aria-busy", "true");
+  renderMemberList(id === MONITOR_ROOM ? [] : null);
+  // The dashboard has no participants; keep the conversation info closed there.
+  if (id === MONITOR_ROOM) nav.closeMembers({ restoreFocus: false });
   renderRooms();
   els.empty.classList.add("is-hidden");
   els.roomView.classList.remove("is-hidden");
@@ -717,6 +742,7 @@ async function selectRoom(id) {
     refreshExtras();
   }
   await refreshRoom(true);
+  if (state.selectedRoom === id) els.messages.removeAttribute("aria-busy");
   startPolling();
 }
 // The last live snapshot stays on screen, dimmed, when the collector stops.
@@ -811,35 +837,42 @@ function paintPending(roomId) {
   if(state.selectedRoom===roomId && state.roomData){els.messages._pinned=true;renderRoom(state.roomData);}
   state.extra.forEach((pane,index)=>{if(pane.roomId!==roomId)return;const list=$$(".extra-pane")[index]?.querySelector(".message-list");if(!list)return;list._pinned=true;renderTranscript(list,mergePendingMessages(pane.data?.messages || [],pendingMessages.get(roomId)),{pane,roomId,busy:!!pane.data?.busy&&pane.data.room?.id===roomId});});
 }
+// Participants: owner first, then by name. Placeholders stand in until the room answers.
+let memberQuery = "", memberKey = "";
+function renderMemberList(members) {
+  const list = els.memberList, total = $("#member-total"), field = $("#member-search-field"), input = $("#member-search");
+  if (!members) {
+    memberKey = ""; memberQuery = ""; input.value = ""; field.hidden = true;
+    list.setAttribute("aria-busy", "true"); total.textContent = ""; els.memberCount.textContent = ""; $("#room-info-meta").textContent = "";
+    list.replaceChildren(...Array.from({ length: 3 }, () => { const row = document.createElement("div"); row.className = "member-row is-placeholder"; row.setAttribute("aria-hidden", "true"); row.append(document.createElement("i"), document.createElement("i")); return row; }));
+    return;
+  }
+  list.removeAttribute("aria-busy");
+  els.memberCount.textContent = String(members.length);
+  total.textContent = members.length ? `${members.length}명` : "";
+  $("#room-info-meta").textContent = members.length ? `참여자 ${members.length}명` : "";
+  field.hidden = members.length <= 10;
+  if (field.hidden && memberQuery) { memberQuery = ""; input.value = ""; }
+  const shown = filterMembers(sortMembers(members), memberQuery), self = state.session?.user?.id;
+  const key = JSON.stringify([memberQuery, self, shown.map(member => [member.id, member.displayName, member.role, member.avatarLabel, member.avatarColor, member.avatarUrl])]);
+  if (key === memberKey) return;
+  memberKey = key; list.replaceChildren();
+  for (const member of shown) {
+    const row = document.createElement("div"); row.className = "member-row"; row.setAttribute("role", "listitem");
+    const avatar = document.createElement("span"); avatar.className = `avatar ${member.role === "owner" || member.role === "admin" ? "avatar-accent" : ""}`; renderUserAvatar(avatar, member);
+    const copy = document.createElement("span"); copy.className = "member-copy";
+    const name = document.createElement("strong"); name.textContent = member.displayName; name.title = member.displayName;
+    const role = document.createElement("small"); role.textContent = memberRoleLabel(member.role) + (member.id === self ? " · 나" : "");
+    copy.append(name, role); row.append(avatar, copy); list.append(row);
+  }
+  if (!shown.length) { const empty = document.createElement("p"); empty.className = "member-empty"; empty.textContent = memberQuery.trim() ? `‘${memberQuery.trim()}’ 검색 결과가 없어요.` : "아직 참여자가 없어요."; list.append(empty); }
+}
 function renderRoom(data) {
   if(data.room) {const room=state.rooms.find(r=>r.id===data.room.id);if(room&&room.name!==data.room.name){room.name=data.room.name;els.roomTitle.textContent=room.name;renderRooms();}}
   renderContextMeter(data.context);
   messageQueueUI?.render($("#composer-form"), data.room.id, data.queue);
   renderTranscript(els.messages, mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id)), {roomId:data.room.id, busy:!!data.busy, empty:{title:"아직 메시지가 없습니다.", note:"메시지를 보내 대화를 시작하세요."}});
-  const members = data.members || [];
-  els.memberCount.textContent = members.length;
-  els.memberList.replaceChildren();
-  members.forEach((member) => {
-    const row = document.createElement("div");
-    row.className = "member-row";
-    const avatar = document.createElement("span");
-    avatar.className = `avatar ${member.role === "owner" || member.role === "admin" ? "avatar-accent" : ""}`;
-    renderUserAvatar(avatar,member);
-    const copy = document.createElement("span");
-    copy.className = "member-copy";
-    const name = document.createElement("strong");
-    name.textContent = member.displayName;
-    const role = document.createElement("small");
-    role.textContent =
-      member.role === "owner"
-        ? "방장"
-        : member.role === "admin"
-          ? "관리자"
-          : "멤버";
-    copy.append(name, role);
-    row.append(avatar, copy);
-    els.memberList.append(row);
-  });
+  renderMemberList(data.members || []);
   els.roomView.classList.toggle("agent-working",!!data.busy);
   if (data.busy) {
     clearThinking(els.sendingStatus);
@@ -2136,8 +2169,7 @@ async function makeInvite(path, title) {
 }
 function closeSidebar() {
   closeProfileMenu();
-  $("#sidebar").classList.remove("is-open");
-  $("#sidebar-scrim").classList.remove("is-visible");
+  nav.closeDrawer();
 }
 function roomPreferences(id) {
   try { return JSON.parse(localStorage.getItem("community-model:" + state.session.user.id + ":" + id) || "{}"); } catch { return {}; }
@@ -2556,6 +2588,27 @@ function assignExtra(index, roomId) {
   renderRooms();
   void refreshExtra(index);
 }
+function setupRoomSearch() {
+  const toggle = $("#room-search-toggle"), field = $("#room-search-field"), input = $("#room-search");
+  const open = () => { field.hidden = false; toggle.setAttribute("aria-expanded", "true"); input.focus(); };
+  const close = () => {
+    field.hidden = true; toggle.setAttribute("aria-expanded", "false");
+    if (roomQuery) { roomQuery = ""; input.value = ""; renderRooms(); }
+    toggle.focus({ preventScroll: true });
+  };
+  toggle.addEventListener("click", () => field.hidden ? open() : close());
+  $("#room-search-close").addEventListener("click", close);
+  input.addEventListener("input", () => { roomQuery = input.value; renderRooms(); });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (input.value) { input.value = ""; roomQuery = ""; renderRooms(); } else close(); }
+    else if (event.key === "ArrowDown" || event.key === "Enter") { const row = $(".branch-row", els.roomList); if (row) { event.preventDefault(); row.focus(); } }
+  });
+}
+// Phones show the conversation title in a slim bar; the participants sheet repeats it.
+function mirrorRoomTitle() {
+  const sync = () => { const title = els.roomTitle.textContent; $("#room-info-title").textContent = title; $("#member-room-name").textContent = title; };
+  new MutationObserver(sync).observe(els.roomTitle, { childList: true, characterData: true, subtree: true }); sync();
+}
 function bind() {
   setupSidebarResize();
   document.body.append($("#profile-menu"));
@@ -2566,8 +2619,7 @@ function bind() {
     if (event.key === "Escape") {
       $("#bot-picker").classList.add("is-hidden");
       $("#bot-picker-button").setAttribute("aria-expanded", "false");
-      els.memberPanel.classList.remove("is-open");
-      closeSidebar();
+      if (!event.defaultPrevented && !event.target.closest?.("dialog")) { closeProfileMenu(); nav.escape(); }
     }
   });
   document.addEventListener("click", (event) => {
@@ -2652,12 +2704,16 @@ function bind() {
     const hidden = picker.classList.toggle("is-hidden");
     $("#bot-picker-button").setAttribute("aria-expanded", String(!hidden));
   });
-  $("#members-toggle").addEventListener("click", () =>
-    els.memberPanel.classList.toggle("is-open"),
-  );
-  $("#member-close").addEventListener("click", () =>
-    els.memberPanel.classList.remove("is-open"),
-  );
+  $("#members-toggle").addEventListener("click", (event) => nav.toggleMembers(event.currentTarget, { keyboard: event.detail === 0 }));
+  $("#room-info-button").addEventListener("click", (event) => nav.toggleMembers(event.currentTarget, { keyboard: event.detail === 0 }));
+  $("#member-close").addEventListener("click", () => nav.closeMembers());
+  $("#member-search").addEventListener("input", (event) => { memberQuery = event.target.value; renderMemberList(state.roomData?.members || []); });
+  $("#member-search").addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !event.target.value) return;
+    event.preventDefault(); event.stopPropagation(); event.target.value = ""; memberQuery = ""; renderMemberList(state.roomData?.members || []);
+  });
+  setupRoomSearch();
+  mirrorRoomTitle();
   $("#room-invite-button").addEventListener("click", () => sharingUI?.open(state.roomData?.room || state.rooms.find(room=>room.id===state.selectedRoom)));
   $("#profile-customize").addEventListener("click", toggleProfileMenu);
   $("#profile-menu").addEventListener("close",()=>$("#profile-customize").setAttribute("aria-expanded","false"));
@@ -2665,9 +2721,10 @@ function bind() {
     if(!event.target.closest("#profile-menu, #profile-customize"))closeProfileMenu();
   });
   $("#profile-menu").addEventListener("click",event=>{
-    if(event.target.closest("button:not(:disabled)")){closeProfileMenu();$("#profile-customize").focus({preventScroll:true});}
+    if(event.target.closest("button:not(:disabled)")){closeProfileMenu();if(nav.drawerOpen())closeSidebar();else $("#profile-customize").focus({preventScroll:true});}
   },true);
   $("#profile-menu").addEventListener("keydown",event=>{
+    if(handleMenuKeys(event,$("#profile-menu"),".profile-menu-item:not(:disabled):not(.is-hidden)"))return;
     if(event.key!=="Escape")return;
     event.preventDefault();event.stopPropagation();closeProfileMenu();$("#profile-customize").focus();
   });
@@ -2690,19 +2747,9 @@ function bind() {
       toast("복사하지 못했습니다. 링크를 직접 선택해주세요.");
     }
   });
-  $("#mobile-menu").addEventListener("click", () => {
-    if (matchMedia("(max-width: 720px)").matches) {
-      const open = $("#sidebar").classList.toggle("is-open");
-      $("#sidebar-scrim").classList.toggle("is-visible", open);
-      $("#mobile-menu").setAttribute("aria-expanded", String(open));
-    } else {
-      const hidden = els.workspace.classList.toggle("sidebar-collapsed");
-      $("#mobile-menu").setAttribute("aria-expanded", String(!hidden));
-    }
-  });
+  $("#mobile-menu").addEventListener("click", (event) => { closeProfileMenu(); nav.toggleSidebar({ keyboard: event.detail === 0 }); });
   setupDock();
   $("#mobile-close").addEventListener("click", closeSidebar);
-  $("#sidebar-scrim").addEventListener("click", closeSidebar);
   $$(".modal-close, .modal-cancel").forEach((button) =>
     button.addEventListener("click", () =>
       closeDialog(button.closest("dialog")),
@@ -2847,17 +2894,18 @@ async function moveSession(roomId, targetId, after = false) {
   if (await saveSidebar({...sidebarState, roomOrder:next}) && state.session?.user?.id === userId && sidebarEpoch === epoch) toast("대화 순서를 저장했습니다.");
 }
 function setupDock() {
-  const grid=$("#pane-grid"), preview=document.createElement("div"), menu=document.createElement("div"), hint=document.createElement("div");
+  const grid=$("#pane-grid"), preview=document.createElement("div"), hint=document.createElement("div");
   preview.className="dock-preview"; preview.hidden=true; document.body.append(preview);
   hint.className="session-drag-hint";hint.hidden=true;hint.setAttribute("role","status");hint.setAttribute("aria-live","polite");document.body.append(hint);
-  menu.className="dock-menu"; menu.hidden=true; menu.setAttribute("role","menu"); document.body.append(menu);
+  const roomMenu=createMenu({className:"dock-menu nav-menu"});
   let pointerDock = null, suppressClick = false, scrollFrame = null;
   const sourceRoom = () => pendingDock?.roomId || (pendingDock?.index !== undefined ? dockRoomAt(pendingDock.index) : null);
-  const hide=()=>{preview.hidden=true;hint.hidden=true;menu.hidden=true;};
+  const hide=()=>{preview.hidden=true;hint.hidden=true;};
+  const suppressNextClick=()=>{suppressClick=true;setTimeout(()=>{suppressClick=false;},0);};
   function dropAt(event) {
     const hit=document.elementFromPoint(event.clientX,event.clientY), sourceId=sourceRoom();
     if(!hit || !sourceId)return null;
-    const row=hit.closest(".branch-row[data-dock-room]");
+    const row=hit.closest(".branch-row[data-dock-room]")||hit.closest(".branch-item")?.querySelector(".branch-row[data-dock-room]");
     if(row){
       const targetId=row.dataset.dockRoom;if(targetId===sourceId)return null;
       const rect=row.getBoundingClientRect(), fraction=(event.clientY-rect.top)/rect.height;
@@ -2910,6 +2958,7 @@ function setupDock() {
   function stopPointer() {
     if(scrollFrame!==null)cancelAnimationFrame(scrollFrame);scrollFrame=null;
     const drag=pointerDock;pointerDock=null;pendingDock=null;hide();
+    if(drag){clearTimeout(drag.timer);drag.row?.classList.remove("is-lifted");}
     document.body.classList.remove("session-dragging");
     if(drag&&document.body.hasPointerCapture(drag.id))document.body.releasePointerCapture(drag.id);
   }
@@ -2929,11 +2978,22 @@ function setupDock() {
     const room=event.target.closest("[data-dock-room]"),handle=event.target.closest(".pane-bar[data-dock-index],.header-identity[data-dock-index]");
     if(!room&&(!handle||event.target.closest("button")))return;
     pointerDock={id:event.pointerId,epoch:sidebarEpoch,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,source:room?{roomId:room.dataset.dockRoom}:{index:Number(handle.dataset.dockIndex)}};
+    // A finger scrolls the list. Holding it still on a conversation lifts it for
+    // dragging; letting go without moving opens the conversation menu instead.
+    if(room&&event.pointerType!=="mouse"){
+      const drag=pointerDock;drag.touch=true;drag.row=room;drag.pointerType=event.pointerType;
+      drag.timer=setTimeout(()=>{if(pointerDock===drag){drag.armed=true;room.classList.add("is-lifted");}},420);
+    }
   });
+  let longPressDone=false;
+  els.roomList.addEventListener("touchmove",event=>{if(pointerDock?.armed&&event.cancelable)event.preventDefault();},{passive:false});
+  // After a long press the browser must not also tap the row (which would open it and take focus).
+  els.roomList.addEventListener("touchend",event=>{if(longPressDone&&event.cancelable)event.preventDefault();longPressDone=false;},{passive:false});
   document.addEventListener("pointermove", event => {
     if(!pointerDock||event.pointerId!==pointerDock.id)return;
     if(event.buttons===0){stopPointer();return;}
     if(pointerDock.epoch!==sidebarEpoch){stopPointer();return;}
+    if(pointerDock.touch&&!pointerDock.armed){if(Math.hypot(event.clientX-pointerDock.x,event.clientY-pointerDock.y)>8)stopPointer();return;}
     pointerDock.lastX=event.clientX;pointerDock.lastY=event.clientY;
     if(!pointerDock.active&&Math.hypot(event.clientX-pointerDock.x,event.clientY-pointerDock.y)<7)return;
     if(!pointerDock.active){pointerDock.active=true;document.body.setPointerCapture(event.pointerId);document.body.classList.add("session-dragging");scrollFrame=requestAnimationFrame(scrollList);}
@@ -2941,8 +3001,10 @@ function setupDock() {
   },{passive:false});
   document.addEventListener("pointerup", event => {
     if(!pointerDock||event.pointerId!==pointerDock.id)return;
-    if(pointerDock.active&&pointerDock.epoch===sidebarEpoch){completeDrop(dropAt(event));suppressClick=true;setTimeout(()=>{suppressClick=false;},0);}
+    const drag=pointerDock;
+    if(drag.active&&drag.epoch===sidebarEpoch){completeDrop(dropAt(event));suppressNextClick();}
     stopPointer();
+    if(drag.touch&&drag.armed&&drag.epoch===sidebarEpoch){longPressDone=drag.pointerType==="touch";suppressNextClick();if(!drag.active)openRoomMenu({roomId:drag.source.roomId,anchor:drag.row,from:drag.row});}
   });
   document.addEventListener("click",event=>{if(suppressClick){event.preventDefault();event.stopImmediatePropagation();}},true);
   document.addEventListener("pointercancel",stopPointer);
@@ -2952,40 +3014,65 @@ function setupDock() {
   grid.addEventListener("pointermove",event=>{if(pendingDock?.placing)previewDrop(dropAt(event),event);});
   grid.addEventListener("click",event=>{if(pendingDock?.placing){event.preventDefault();event.stopImmediatePropagation();completeDrop(dropAt(event));pendingDock=null;hide();}},true);
   els.roomList.addEventListener("keydown",event=>{
+    const keyRow=event.target.closest(".branch-row");
+    if(keyRow&&(event.key==="ContextMenu"||(event.shiftKey&&event.key==="F10"))){event.preventDefault();openRoomMenu({roomId:keyRow.dataset.roomId,anchor:keyRow,from:keyRow});return;}
     if(!event.altKey||!["ArrowUp","ArrowDown"].includes(event.key))return;
     const row=event.target.closest(".branch-row");if(!row)return;
     const rows=$$(".branch-row",els.roomList),index=rows.indexOf(row),target=rows[index+(event.key==="ArrowUp"?-1:1)];
     event.preventDefault();if(target)void moveSession(row.dataset.roomId,target.dataset.roomId,event.key==="ArrowDown");
   });
-  const begin=roomId=>{pendingDock={roomId,placing:true};menu.hidden=true;toast("놓을 위치를 가리킨 뒤 클릭하세요. 제목 위는 Merge, 대화 안은 분할입니다.");};
+  const begin=roomId=>{pendingDock={roomId,placing:true};toast("놓을 곳을 가리킨 뒤 누르세요. 대화 제목 위는 Merge, 대화 화면 안은 나란히 보기입니다.");};
+  // One menu for right-click, the ⋯ button, a long press and the keyboard menu key.
+  function confirmRoomDelete(room) {
+    const dialog=sidebarDialog("대화를 삭제할까요?");dialog.classList.add("nav-confirm-dialog");
+    const name=document.createElement("p");name.className="nav-confirm-name";name.textContent=room.name;
+    const note=document.createElement("p");note.className="sidebar-dialog-note";note.textContent="내 목록에서만 사라지고 다른 참여자의 대화는 그대로 남아요. 계정 메뉴의 ‘대화 복원’에서 되돌릴 수 있어요.";
+    const actions=document.createElement("div");actions.className="sidebar-dialog-actions";
+    const cancel=document.createElement("button");cancel.type="button";cancel.textContent="취소";cancel.onclick=()=>dialog.close();
+    const confirm=document.createElement("button");confirm.type="button";confirm.className="is-danger";confirm.textContent="삭제";
+    confirm.onclick=()=>{dialog.close();void updateRoomListPreference(room,{archived:true});};
+    actions.append(cancel,confirm);dialog.append(name,note,actions);dialog.showModal();cancel.focus();
+  }
+  function openRoomMenu({roomId=null,panelIndex=null,anchor=null,from=null}={}) {
+    const id=roomId||(panelIndex!==null?dockRoomAt(panelIndex):null), targetRoom=state.rooms.find(r=>r.id===id);
+    const opened=new Set([state.selectedRoom,...state.extra.map(pane=>pane.roomId)].filter(Boolean));
+    const fine=matchMedia("(hover:hover) and (pointer:fine)").matches;
+    const then=run=>()=>{if(nav.drawerOpen())closeSidebar();run();};
+    const items=[];
+    // A phone is too narrow for two conversations side by side, so it offers no split.
+    const phone=matchMedia("(max-width: 720px)").matches;
+    if(id&&state.selectedRoom&&!opened.has(id)&&!phone){
+      items.push({label:"오른쪽에 나란히 열기",run:then(()=>{pendingDock={roomId:id};placeDock(Math.min(state.focusPane,dockRects.length-1),"right");})});
+      if(fine)items.push({label:"놓을 곳 골라 나란히 열기",run:then(()=>begin(id))});
+    }
+    if(dockRects.length>1)items.push({label:"나란히 보기 닫기",run:then(()=>{state.layout=2;setLayout(2);dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();hide();})});
+    if(targetRoom) {
+      if(targetRoom.id!==MONITOR_ROOM&&!targetRoom.archived){
+        items.push({label:"여기서 Fork",run:then(()=>void sessionAction("fork",null,null,null,null,targetRoom.id))});
+        items.push({label:"다른 가지와 Merge",run:then(()=>mergeBranch(targetRoom.id))});
+      }
+      if(sidebarState.loaded&&sidebarState.groups.length&&targetRoom.id!==MONITOR_ROOM)items.push({label:"그룹으로 이동",run:then(()=>openRoomGroupPicker(targetRoom))});
+      items.push({label:targetRoom.pinned?"고정 해제":"상단에 고정",run:()=>void updateRoomListPreference(targetRoom,{pinned:!targetRoom.pinned})});
+      items.push(targetRoom.archived?{label:"대화 복원",run:()=>void updateRoomListPreference(targetRoom,{archived:false})}:{separator:true});
+      if(!targetRoom.archived)items.push({label:"대화 삭제",danger:true,run:then(()=>confirmRoomDelete(targetRoom))});
+    }
+    if(!items.length)return;
+    roomMenu.open({items,anchor,from,title:targetRoom?.name||""});
+  }
+  els.roomList.addEventListener("click",event=>{
+    const more=event.target.closest(".branch-more");if(!more)return;
+    if(roomMenu.isOpen()&&roomMenu.trigger()===more){roomMenu.close();return;}
+    openRoomMenu({roomId:more.dataset.roomId,anchor:more,from:more});
+  });
   document.addEventListener("contextmenu",event=>{
     const room=event.target.closest("[data-dock-room]"), panel=event.target.closest("[data-dock-index]");
     if(!room&&!panel)return;if(event.target.closest("textarea,input"))return;
-    event.preventDefault();menu.replaceChildren();
-    const action=document.createElement("button");action.type="button";action.setAttribute("role","menuitem");action.textContent="Split view로 열기";
-    action.onclick=()=>begin(room?.dataset.dockRoom || dockRoomAt(Number(panel.dataset.dockIndex)));menu.append(action);
-    const targetRoom=state.rooms.find(r=>r.id===(room?.dataset.dockRoom || dockRoomAt(Number(panel.dataset.dockIndex))));
-    if(targetRoom) {
-      const addAction=(label,handler)=>{const b=document.createElement("button");b.type="button";b.setAttribute("role","menuitem");b.textContent=label;b.onclick=()=>{menu.hidden=true;handler();};menu.append(b);};
-      if(targetRoom.id!==MONITOR_ROOM&&!targetRoom.archived){
-        addAction("여기서 Fork",()=>void sessionAction("fork",null,null,null,null,targetRoom.id));
-        addAction("다른 가지와 Merge",()=>mergeBranch(targetRoom.id));
-      }
-      if(sidebarState.loaded&&sidebarState.groups.length&&targetRoom.id!==MONITOR_ROOM)addAction("그룹으로 이동",()=>openRoomGroupPicker(targetRoom));
-      addAction(targetRoom.pinned?"고정 해제":"상단에 고정",()=>updateRoomListPreference(targetRoom,{pinned:!targetRoom.pinned}));
-      addAction(targetRoom.archived?"대화 복원":"대화 삭제",()=>{
-        if(targetRoom.archived) return updateRoomListPreference(targetRoom,{archived:false});
-        const dialog=document.createElement("dialog");dialog.className="quick-model-picker";
-        const text=document.createElement("p");text.textContent="내 대화 목록에서 삭제할까요? 삭제한 대화에서 복원할 수 있으며 다른 참여자의 대화는 유지됩니다.";
-        const confirm=document.createElement("button");confirm.textContent="삭제";confirm.onclick=()=>{dialog.close();updateRoomListPreference(targetRoom,{archived:true});};
-        const cancel=document.createElement("button");cancel.textContent="취소";cancel.onclick=()=>dialog.close();
-        dialog.append(text,confirm,cancel);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
-      });
-    }
-    const reset=document.createElement("button");reset.type="button";reset.setAttribute("role","menuitem");reset.textContent="분할 닫기";reset.onclick=()=>{state.layout=2;setLayout(2);dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();hide();};menu.append(reset);
-    menu.hidden=false;Object.assign(menu.style,{left:Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+"px",top:Math.max(8,Math.min(event.clientY,innerHeight-menu.offsetHeight-8))+"px"});action.focus();
+    event.preventDefault();
+    // A long press on a touch screen opens the menu when the finger lifts.
+    if(pointerDock?.touch)return;
+    const fromKeyboard=!event.clientX&&!event.clientY, owner=room||panel;
+    openRoomMenu({roomId:room?.dataset.dockRoom||null,panelIndex:room?null:Number(panel.dataset.dockIndex),anchor:fromKeyboard?owner:{x:event.clientX,y:event.clientY},from:owner.matches("button,[tabindex]")?owner:null});
   });
-  document.addEventListener("pointerdown",event=>{if(!menu.contains(event.target))menu.hidden=true;});
   document.addEventListener("keydown",event=>{if(event.key==="Escape")stopPointer();});
   applyDockLayout();
 }

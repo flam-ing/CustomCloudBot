@@ -1197,7 +1197,10 @@ button {
 .dock-menu button { display:block; width:100%; padding:10px; text-align:left; background:transparent; border:0; border-radius:6px; color:#eee; }
 .dock-menu button:hover,.dock-menu button:focus { background:#444; }
 
-[data-dock-room], .pane-bar[data-dock-index], .header-identity[data-dock-index] { user-select:none; cursor:grab; touch-action:none; }
+.pane-bar[data-dock-index], .header-identity[data-dock-index] { user-select:none; cursor:grab; touch-action:none; }
+/* Conversation rows scroll with a finger; only a mouse drags them right away. */
+[data-dock-room] { user-select:none; -webkit-user-select:none; }
+@media (hover:hover) and (pointer:fine) { [data-dock-room] { cursor:grab; touch-action:none; } }
 
 /* Calm desktop rhythm: restrained surfaces, clearer hierarchy, short motion. */
 :root { --bg:#0c0d0f; --sidebar:#131416; --surface:#1c1d20; --line:#ffffff12; --hover:#ffffff0a; --selected:#ffffff10; --bot-bubble:#202226; --own-bubble:#363a40; --ease-out:cubic-bezier(.22,1,.36,1); }
