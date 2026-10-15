@@ -4,6 +4,21 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 const terminalPath=/^\/api\/rooms\/([a-f0-9-]{36})\/workspace\/terminal\/ws$/;
 const MAX_FILE=8*1024*1024;
+const INPUT_MODES=new Set(['text','decimal','numeric','tel','search','email','url']);
+const INPUT_REGION_LIMIT=256,INPUT_COORDINATE_LIMIT=32768;
+
+/** Only editable screen bounds cross this boundary, never accessibility text or values. */
+export function browserInputRegions(value){
+  if(value?.available!==true||!Array.isArray(value.regions))return {available:false,regions:[]};
+  const regions=[];
+  for(const region of value.regions.slice(0,INPUT_REGION_LIMIT)){
+    if(!region||!['x','y','width','height'].every(key=>typeof region[key]==='number'&&Number.isFinite(region[key])))continue;
+    const {x,y,width,height}=region;
+    if(x<0||y<0||width<=0||height<=0||x+width>INPUT_COORDINATE_LIMIT||y+height>INPUT_COORDINATE_LIMIT)continue;
+    regions.push({x,y,width,height,...(INPUT_MODES.has(region.inputMode)?{inputMode:region.inputMode}:{})});
+  }
+  return {available:true,regions};
+}
 
 export function workspaceEndpoint(config){
   if(!config?.cdpUrl)throw fail(503,'작업 공간이 연결되지 않았습니다.');
@@ -24,12 +39,12 @@ async function boundedBody(response,maximum){
   return Buffer.concat(parts);
 }
 export function createWorkspaceHub({server,desktops,userFor,roomFor,originFor,touch=()=>{},fetchImpl=fetch}){
-  const tickets=new Map(),connections=new Set();
+  const tickets=new Map(),connections=new Set(),inputRegionsCache=new Map();
   const wss=new WebSocketServer({noServer:true,perMessageDeflate:false,maxPayload:32768});
-  async function remote(roomId,path,maximum=256*1024){
+  async function remote(roomId,path,maximum=256*1024,timeout=10000){
     const base=workspaceEndpoint(desktops.get(roomId));
     let response;
-    try{response=await fetchImpl(new URL(path,base),{redirect:'error',signal:AbortSignal.timeout(10000)});}
+    try{response=await fetchImpl(new URL(path,base),{redirect:'error',signal:AbortSignal.timeout(timeout)});}
     catch{throw fail(503,'OCI 작업 공간에 연결하지 못했습니다. 잠시 후 다시 연결해주세요.');}
     if(!response.ok){await response.body?.cancel();throw fail([400,403,404,413,429].includes(response.status)?response.status:503,'작업 공간 요청을 처리하지 못했습니다.');}
     return boundedBody(response,maximum);
@@ -85,10 +100,27 @@ export function createWorkspaceHub({server,desktops,userFor,roomFor,originFor,to
   });
   return {
     ticket,
+    async inputRegions(roomId){
+      // Rooms on the shared desktop reuse the same short-lived geometry snapshot.
+      // The HTTP route still checks each requesting user's room membership.
+      const key=workspaceEndpoint(desktops.get(roomId)).href,now=Date.now(),cached=inputRegionsCache.get(key);
+      if(cached?.pending)return cached.pending;
+      if(cached?.expiresAt>now)return cached.value;
+      if(inputRegionsCache.size>=64)inputRegionsCache.delete(inputRegionsCache.keys().next().value);
+      const entry={pending:null,value:null,expiresAt:0};inputRegionsCache.set(key,entry);
+      entry.pending=(async()=>{
+        const raw=await remote(roomId,'/browser/input-regions',65536,2000);
+        let result;try{result=JSON.parse(raw.toString());}catch{throw fail(503,'브라우저 입력 위치를 확인하지 못했습니다.');}
+        entry.value=browserInputRegions(result);entry.expiresAt=Date.now()+200;return entry.value;
+      })();
+      try{return await entry.pending;}
+      catch(error){if(inputRegionsCache.get(key)===entry)inputRegionsCache.delete(key);throw error;}
+      finally{entry.pending=null;}
+    },
     async status(roomId){let healthy=false;try{healthy=JSON.parse((await remote(roomId,'/health',4096)).toString()).ok===true;}catch{}
       return {browser:desktops.has(roomId),terminal:healthy,files:healthy,shared:!!desktops.sharedRoomId};},
     async files(roomId,path){const clean=workspacePath(path);return JSON.parse((await remote(roomId,'/files?path='+encodeURIComponent(clean))).toString());},
     async file(roomId,path){return remote(roomId,'/file?path='+encodeURIComponent(workspacePath(path)),MAX_FILE);},
-    close(){tickets.clear();for(const {client,upstream}of connections){client.terminate();upstream.terminate();}connections.clear();wss.close();},
+    close(){tickets.clear();inputRegionsCache.clear();for(const {client,upstream}of connections){client.terminate();upstream.terminate();}connections.clear();wss.close();},
   };
 }

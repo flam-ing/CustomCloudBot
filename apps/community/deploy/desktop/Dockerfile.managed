@@ -1,7 +1,7 @@
 # Extend the already verified ARM64 Chrome desktop; no provider/image switch.
 FROM community-desktop:local
 USER root
-RUN apt-get update && apt-get install --no-install-recommends -y tint2 pcmanfm python3-aiohttp \
+RUN apt-get update && apt-get install --no-install-recommends -y tint2 pcmanfm python3-aiohttp python3-pyatspi at-spi2-core dbus \
     && rm -rf /var/lib/apt/lists/*
 COPY dock.tint2rc /etc/openclawbot/dock.tint2rc
 COPY terminal.desktop chrome.desktop files.desktop /usr/local/share/applications/

@@ -11,11 +11,19 @@ export function remoteTextKeys(text) {
   });
 }
 
-/** A real editable, focused synchronously by a user gesture, opens phone keyboards.
- * The remote screen is pixels: the keyboard button is explicit because it cannot
- * identify text fields, and opening a keyboard on every canvas tap blocks browsing.
+/** Map the scaled VNC canvas back to native desktop screen coordinates. */
+export function remoteInputAt(canvas,regions,clientX,clientY) {
+  const rect=canvas.getBoundingClientRect();
+  if(!(rect.width>0&&rect.height>0&&canvas.width>0&&canvas.height>0))return null;
+  const x=(clientX-rect.left)*canvas.width/rect.width,y=(clientY-rect.top)*canvas.height/rect.height;
+  if(x<0||y<0||x>=canvas.width||y>=canvas.height)return null;
+  return regions.find(r=>[r.x,r.y,r.width,r.height].every(Number.isFinite)&&r.width>0&&r.height>0&&x>=r.x&&y>=r.y&&x<r.x+r.width&&y<r.y+r.height)||null;
+}
+
+/** Focus a real editable during the native touch gesture, never after an awaited
+ * server reply. The caller supplies cached native input bounds before each tap.
  */
-export function createRemoteKeyboard({rfb,viewport,button,canInput=()=>true,onChange=()=>{}}) {
+export function createRemoteKeyboard({rfb,viewport,canInput=()=>true,onChange=()=>{}}) {
   const doc=viewport.ownerDocument,input=doc.createElement('textarea'),listeners=[];
   input.className='workspace-remote-keyboard';input.rows=1;input.maxLength=4096;
   input.setAttribute('aria-label','원격 브라우저 키보드 입력');
@@ -23,7 +31,7 @@ export function createRemoteKeyboard({rfb,viewport,button,canInput=()=>true,onCh
   input.setAttribute('autocomplete','off');input.setAttribute('spellcheck','false');
   input.setAttribute('inputmode','text');input.setAttribute('data-lpignore','true');
   input.tabIndex=-1;input.disabled=true;viewport.append(input);
-  let enabled=false,disposed=false,composing=false,previous=SEED,touch=null;
+  let enabled=false,disposed=false,composing=false,previous=SEED,canvas=null;
   const originalFocusOnClick=rfb.focusOnClick;
   const ready=()=>!disposed&&canInput()&&!rfb.viewOnly;
   const listen=(target,type,handler,options)=>{target.addEventListener(type,handler,options);listeners.push(()=>target.removeEventListener(type,handler,options));};
@@ -54,14 +62,10 @@ export function createRemoteKeyboard({rfb,viewport,button,canInput=()=>true,onCh
   const setEnabled=value=>{
     enabled=!!value&&ready();composing=false;reset();input.disabled=!enabled;
     rfb.focusOnClick=enabled?false:originalFocusOnClick;
-    button.setAttribute('aria-pressed',String(enabled));
-    button.setAttribute('aria-label',enabled?'원격 키보드 닫기':'원격 키보드 열기');
-    button.title=enabled?'키보드 닫기':'입력칸을 선택한 뒤 키보드 열기';
     if(enabled)focus();else input.blur();
     onChange(enabled);
     return enabled;
   };
-  listen(button,'click',()=>setEnabled(!enabled));
   listen(input,'compositionstart',()=>{composing=true;});
   listen(input,'compositionend',()=>{composing=false;flush();});
   listen(input,'input',event=>{if(!event.isComposing)flush();});
@@ -73,7 +77,7 @@ export function createRemoteKeyboard({rfb,viewport,button,canInput=()=>true,onCh
   });
   listen(input,'keydown',event=>{
     // The canvas keeps noVNC's physical-keyboard path. This sibling editable owns
-    // text/IME only while the explicit keyboard mode is selected, without echoes.
+    // text/IME after tapping a remote text field, without echoes.
     event.stopPropagation();
     if(!enabled||!ready()||composing||event.isComposing||event.keyCode===229)return;
     const special=SPECIAL_KEYS[event.key];
@@ -94,19 +98,34 @@ export function createRemoteKeyboard({rfb,viewport,button,canInput=()=>true,onCh
   listen(input,'keyup',event=>event.stopPropagation());
   listen(input,'blur',()=>{composing=false;flush();reset();});
   listen(viewport,'pointerdown',event=>{
-    if(!enabled||event.target===input)return;
-    composing=false;flush();reset();
-    touch=event.isPrimary!==false&&(event.pointerType==='touch'||event.button===0)?{id:event.pointerId,x:event.clientX,y:event.clientY}:null;
+    // Commit to the old remote field before noVNC moves the remote caret.
+    if(enabled&&event.target!==input){composing=false;flush();reset();}
   },true);
-  listen(viewport,'pointermove',event=>{
-    if(touch&&event.pointerId===touch.id&&Math.hypot(event.clientX-touch.x,event.clientY-touch.y)>12)touch=null;
-  },true);
-  listen(viewport,'pointerup',event=>{if(touch&&event.pointerId===touch.id)focus();touch=null;},true);
-  listen(viewport,'pointercancel',()=>{touch=null;},true);
-  reset();button.setAttribute('aria-pressed','false');button.title='입력칸을 선택한 뒤 키보드 열기';
+  reset();
   return {
     focus,
     setEnabled,
+    bindCanvas(target,{getRegions,onInvalidate=()=>{}}) {
+      if(canvas||disposed)return;
+      canvas=target;
+      // noVNC emits this synchronously inside touchend, after its remote click.
+      // Register after RFB connect: focusing/resizing earlier changes click coords.
+      listen(canvas,'gesturestart',event=>{
+        if(!ready())return;
+        const tap=event.detail?.type==='onetap';
+        const region=tap?remoteInputAt(canvas,getRegions(),event.detail.clientX,event.detail.clientY):null;
+        if(region){
+          input.setAttribute('inputmode',['text','email','url','tel','numeric','decimal','search'].includes(region.inputMode)?region.inputMode:'text');
+          setEnabled(true);
+        }else if(enabled)setEnabled(false);
+        onInvalidate({clear:!region});
+      });
+      const moving=event=>{if(event.detail?.type!=='onetap')onInvalidate();};
+      listen(canvas,'gesturemove',moving);
+      listen(canvas,'gestureend',moving);
+      listen(canvas,'wheel',()=>onInvalidate(),{passive:true});
+      listen(canvas,'mouseup',()=>{if(enabled)setEnabled(false);onInvalidate();});
+    },
     get enabled(){return enabled;},
     destroy(){if(disposed)return;setEnabled(false);disposed=true;for(const remove of listeners)remove();input.value='';input.remove();},
   };

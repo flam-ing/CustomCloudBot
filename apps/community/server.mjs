@@ -1437,11 +1437,18 @@ export async function startCommunity(options = {}) {
         if(method==="PUT")return reply(res,200,sidebarStore.write(user.id,body));
         throw failure(405,"허용되지 않은 요청입니다.");
       }
-      const workspaceMatch=url.pathname.match(/^\/api\/rooms\/([a-f0-9-]{36})\/workspace(?:\/(browser\/frame|browser\/action|terminal\/ticket|files|file))?$/);
+      const workspaceMatch=url.pathname.match(/^\/api\/rooms\/([a-f0-9-]{36})\/workspace(?:\/(browser\/frame|browser\/action|browser\/input-regions|terminal\/ticket|files|file))?$/);
       if(workspaceMatch){
         const room=roomFor(workspaceMatch[1],user),part=workspaceMatch[2];
         limit("workspace:"+user.id,1200);
         if(!part&&method==="GET")return reply(res,200,await workspaceHub.status(room.id));
+        if(part==="browser/input-regions"&&method==="GET"){
+          limit("browser-input-regions:"+user.id,600);
+          const regions=await workspaceHub.inputRegions(room.id),current=userFor(req);
+          if(!current||current.sessionHash!==user.sessionHash)throw failure(401,"로그인이 필요합니다.");
+          roomFor(room.id,current);
+          return reply(res,200,regions);
+        }
         if(part==="browser/frame"&&method==="GET"){
           limit("browser-frame:"+user.id,600);
           if(!browserTools.frame)throw failure(503,"브라우저 화면 연결이 필요합니다.");

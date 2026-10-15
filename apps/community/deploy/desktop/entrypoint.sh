@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+# Chrome and the read-only accessibility reader must share one session bus.
+# Run as the existing desktop user; dbus-run-session also reaps its own daemon.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  exec dbus-run-session -- "$0" "$@"
+fi
+
 display="${DISPLAY:-:99}"
 screen="${DESKTOP_SCREEN:-1280x800x24}"
 vnc_port="${DESKTOP_VNC_PORT:-5900}"
@@ -43,6 +49,7 @@ google-chrome \
   --user-data-dir=/home/desktop/chromium \
   --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9223 \
+  --force-renderer-accessibility \
   --no-first-run --no-default-browser-check \
   "$start_url" >/run/desktop/chromium.log 2>&1 &
 browser_pid=$!

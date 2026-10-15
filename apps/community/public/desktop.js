@@ -105,14 +105,24 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
     }catch(error){if(current(generation)){empty('작업 공간에 연결하지 못했습니다.');fail(error,generation);}}
   }
   function mountBrowser(base,generation,signal) {
-    const toolbar=el('div',undefined,'workspace-chrome-toolbar'),label=el('span','Chrome','workspace-chrome-label'),newTab=actionButton('Chrome 새 탭','새 탭'),incognito=actionButton('Chrome 시크릿 창','시크릿'),extensions=actionButton('Chrome 확장 프로그램','확장 프로그램'),keyboardButton=actionButton('원격 키보드 열기','키보드'),fullscreen=actionButton('브라우저 전체 화면','전체 화면');
-    keyboardButton.classList.add('workspace-keyboard-toggle');
-    toolbar.append(label,newTab,incognito,extensions,keyboardButton,fullscreen);
+    const toolbar=el('div',undefined,'workspace-chrome-toolbar'),label=el('span','Chrome','workspace-chrome-label'),newTab=actionButton('Chrome 새 탭','새 탭'),incognito=actionButton('Chrome 시크릿 창','시크릿'),extensions=actionButton('Chrome 확장 프로그램','확장 프로그램'),fullscreen=actionButton('브라우저 전체 화면','전체 화면');
+    toolbar.append(label,newTab,incognito,extensions,fullscreen);
     const viewport=el('div',undefined,'workspace-chrome-viewport');viewport.setAttribute('aria-label','원격 Chrome 브라우저');content.replaceChildren(toolbar,viewport);
-    let rfb=null,keyboard=null,disposed=false,connected=false;
+    let rfb=null,keyboard=null,disposed=false,connected=false,regions=[],regionsAt=0,regionRequest=null,regionTimer=null,regionGeneration=0;
+    // Native input bounds are prefetched: iOS must focus within touchend, not an
+    // async fetch callback. Invalidating during scroll avoids stale hit targets.
+    const refreshRegions=()=>{
+      clearTimeout(regionTimer);
+      if(!connected||!active()||regionRequest)return;
+      const revision=regionGeneration;
+      regionRequest=api(`${base}/browser/input-regions`,{signal}).then(result=>{
+        if(active()&&revision===regionGeneration){regions=result.available?result.regions:[];regionsAt=Date.now();}
+      }).catch(()=>{regions=[];regionsAt=0;}).finally(()=>{regionRequest=null;if(active()&&connected)regionTimer=setTimeout(refreshRegions,750);});
+    };
+    const invalidateRegions=({clear=true}={})=>{if(clear){regions=[];regionsAt=0;}regionGeneration++;clearTimeout(regionTimer);regionTimer=setTimeout(refreshRegions,80);};
     const active=()=>!disposed&&current(generation)&&!signal.aborted;
-    const controls=()=>{for(const button of[newTab,incognito,extensions,keyboardButton])button.disabled=!connected;};controls();
-    const shortcut=(key,shift=false)=>{if(connected&&active()){sendChromeShortcut(rfb,key,shift);keyboard?.focus({clear:true});}};
+    const controls=()=>{for(const button of[newTab,incognito,extensions])button.disabled=!connected;};controls();
+    const shortcut=(key,shift=false)=>{if(connected&&active()){keyboard?.setEnabled(false);sendChromeShortcut(rfb,key,shift);invalidateRegions();}};
     newTab.onclick=()=>shortcut('t');incognito.onclick=()=>shortcut('n',true);
     extensions.onclick=()=>{if(!connected)return;shortcut('t');shortcut('l');for(const char of 'chrome://extensions/')rfb.sendKey(char.charCodeAt(0),null);rfb.sendKey(0xff0d,'Enter');if(!keyboard?.focus({clear:true}))rfb.focus();};
     fullscreen.onclick=()=>void enterDesktopScreen(panel);
@@ -124,14 +134,18 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
         if(endpoint.origin!==location.origin||endpoint.pathname!==`/api/rooms/${roomId}/desktop/ws`)throw new Error('브라우저 연결 주소를 확인할 수 없습니다.');
         endpoint.protocol=location.protocol==='https:'?'wss:':'ws:';
         rfb=new RFB(viewport,endpoint.href,{shared:true});configureDesktopInput(rfb,false);rfb.qualityLevel=7;rfb.compressionLevel=3;
-        const readyStatus=()=>setStatus(keyboard?.enabled?'키보드 입력 중 · 입력칸을 누르면 이어서 입력할 수 있습니다.':matchMedia('(pointer:coarse)').matches?'입력칸을 선택한 뒤 키보드를 눌러 입력하세요.':'Chrome · 탭과 프로필은 브라우저 메뉴에서 관리할 수 있습니다.','ready');
-        keyboard=createRemoteKeyboard({rfb,viewport,button:keyboardButton,canInput:()=>connected&&active(),onChange:enabled=>{keyboardLayout(enabled);if(connected&&active())readyStatus();}});
-        rfb.addEventListener('connect',()=>{if(!active())return;connected=true;controls();readyStatus();});
-        rfb.addEventListener('disconnect',()=>{connected=false;keyboard?.setEnabled(false);controls();if(active())setStatus('Chrome 연결이 종료됐습니다. 다시 연결해주세요.','error');});
+        const readyStatus=()=>setStatus(keyboard?.enabled?'키보드 입력 중 · 입력칸을 누르면 이어서 입력할 수 있습니다.':matchMedia('(pointer:coarse)').matches?'입력칸을 누르면 키보드가 열립니다.':'Chrome · 탭과 프로필은 브라우저 메뉴에서 관리할 수 있습니다.','ready');
+        keyboard=createRemoteKeyboard({rfb,viewport,canInput:()=>connected&&active(),onChange:enabled=>{keyboardLayout(enabled);if(connected&&active())readyStatus();}});
+        rfb.addEventListener('connect',()=>{if(!active())return;connected=true;controls();readyStatus();
+          const canvas=viewport.querySelector('canvas');
+          if(canvas)keyboard.bindCanvas(canvas,{getRegions:()=>Date.now()-regionsAt<1750?regions:[],onInvalidate:invalidateRegions});
+          refreshRegions();
+        });
+        rfb.addEventListener('disconnect',()=>{connected=false;clearTimeout(regionTimer);regions=[];keyboard?.setEnabled(false);controls();if(active())setStatus('Chrome 연결이 종료됐습니다. 다시 연결해주세요.','error');});
         rfb.addEventListener('securityfailure',()=>{if(active())setStatus('브라우저에 연결할 권한을 확인해주세요.','error');});
       }catch(error){if(active())fail(error,generation);}
     })();
-    return()=>{disposed=true;connected=false;controls();keyboard?.destroy();keyboard=null;rfb?.disconnect();rfb=null;viewport.replaceChildren();};
+    return()=>{disposed=true;connected=false;clearTimeout(regionTimer);regions=[];controls();keyboard?.destroy();keyboard=null;rfb?.disconnect();rfb=null;viewport.replaceChildren();};
   }
   function mountFiles(base,roomId,generation,signal) {
     const toolbar=el('div',undefined,'workspace-files-toolbar'),up=actionButton('상위 폴더','↑'),root=actionButton('작업 폴더','⌂'),refresh=actionButton('파일 목록 새로고침','↻'),path=el('span','','workspace-file-path');toolbar.append(up,root,refresh,path);

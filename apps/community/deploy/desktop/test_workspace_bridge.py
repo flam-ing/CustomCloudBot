@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, mock_open, patch
 
 from aiohttp import WSServerHandshakeError, WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
@@ -15,6 +15,160 @@ from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 spec = importlib.util.spec_from_file_location("workspace_bridge", Path(__file__).with_name("workspace-bridge.py"))
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
+
+
+class Accessible:
+    def __init__(self, states=(), children=(), bounds=(10, 20, 100, 30), pid=42):
+        self.states, self.children, self.bounds, self.pid = set(states), list(children), bounds, pid
+
+    @property
+    def childCount(self):
+        return len(self.children)
+
+    def __getitem__(self, index):
+        return self.children[index]
+
+    def get_process_id(self):
+        return self.pid
+
+    def getState(self):
+        return SimpleNamespace(contains=self.states.__contains__)
+
+    def queryComponent(self):
+        return self
+
+    def getExtents(self, coords):
+        assert coords == "screen"
+        return SimpleNamespace(**dict(zip(("x", "y", "width", "height"), self.bounds)))
+
+    @property
+    def name(self):
+        raise AssertionError("Input-region lookup must not read accessible names")
+
+    def queryText(self):
+        raise AssertionError("Input-region lookup must not read field text")
+
+
+AX = SimpleNamespace(**{name: name for name in (
+    "STATE_ACTIVE", "STATE_VISIBLE", "STATE_SHOWING", "STATE_EDITABLE", "STATE_ENABLED", "STATE_DEFUNCT", "STATE_READ_ONLY")}, DESKTOP_COORDS="screen")
+VISIBLE = {AX.STATE_VISIBLE, AX.STATE_SHOWING}
+EDITABLE = VISIBLE | {AX.STATE_EDITABLE, AX.STATE_ENABLED}
+
+
+def accessible_desktop(children, *, active=True, pid=42):
+    window = Accessible(VISIBLE | ({AX.STATE_ACTIVE} if active else set()), children)
+    return Accessible(children=[Accessible(children=[window], pid=pid)])
+
+
+class InputRegionTests(unittest.TestCase):
+    def test_native_geometry_includes_omnibox_and_nested_editors_without_text(self):
+        omnibox = Accessible(EDITABLE, bounds=(100, 45, 800, 32))
+        editor = Accessible(EDITABLE, bounds=(321, 456, 280, 42))
+        nested = Accessible(children=[Accessible(children=[editor])])
+        result = bridge.collect_input_regions(accessible_desktop([omnibox, nested]), AX, lambda pid: pid == 42)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["regions"], [
+            {"x": 100, "y": 45, "width": 800, "height": 32, "inputMode": "text"},
+            {"x": 321, "y": 456, "width": 280, "height": 42, "inputMode": "text"},
+        ])
+        self.assertFalse(result["truncated"])
+
+    def test_readonly_disabled_hidden_defunct_background_and_other_displays_are_excluded(self):
+        rejected = [
+            Accessible(EDITABLE | {AX.STATE_READ_ONLY}),
+            Accessible(EDITABLE - {AX.STATE_ENABLED}),
+            Accessible(EDITABLE - {AX.STATE_SHOWING}),
+            Accessible(EDITABLE | {AX.STATE_DEFUNCT}),
+        ]
+        for desktop, predicate in [
+            (accessible_desktop(rejected), lambda pid: True),
+            (accessible_desktop([Accessible(EDITABLE)], active=False), lambda pid: True),
+            (accessible_desktop([Accessible(EDITABLE)]), lambda pid: False),
+        ]:
+            self.assertEqual(bridge.collect_input_regions(desktop, AX, predicate)["regions"], [])
+
+    def test_offscreen_fields_are_clipped_duplicates_removed_and_tree_is_bounded(self):
+        clipped = Accessible(EDITABLE, bounds=(-20, -10, 60, 40))
+        duplicate = Accessible(EDITABLE, bounds=(-20, -10, 60, 40))
+        outside = Accessible(EDITABLE, bounds=(-500, 50, 30, 20))
+        empty = Accessible(EDITABLE, bounds=(20, 50, 0, 20))
+        result = bridge.collect_input_regions(accessible_desktop([clipped, duplicate, outside, empty]), AX, lambda pid: True)
+        self.assertEqual(result["regions"], [{"x": 0, "y": 0, "width": 40, "height": 30, "inputMode": "text"}])
+        many = [Accessible(EDITABLE, bounds=(index, 20, 10, 10)) for index in range(400)]
+        result = bridge.collect_input_regions(accessible_desktop(many), AX, lambda pid: True)
+        self.assertEqual(len(result["regions"]), bridge.MAX_INPUT_REGIONS)
+        self.assertTrue(result["truncated"])
+        cycle = Accessible(); cycle.children = [cycle]
+        result = bridge.collect_input_regions(accessible_desktop([cycle]), AX, lambda pid: True)
+        self.assertEqual(result["regions"], [])
+        result = bridge.collect_input_regions(accessible_desktop(many), AX, lambda pid: True, budget=0)
+        self.assertTrue(result["truncated"])
+
+    def test_process_filter_accepts_only_browser_on_main_display(self):
+        with patch.object(bridge.os, "readlink", return_value="/opt/google/chrome/chrome"):
+            with patch("builtins.open", mock_open(read_data=b"DISPLAY=:99\0OTHER=value\0")):
+                self.assertTrue(bridge.browser_on_main_display(42))
+            for environment in (b"DISPLAY=:100\0", b"DISPLAY=:101\0", b"UNRELATED=DISPLAY=:99\0"):
+                with patch("builtins.open", mock_open(read_data=environment)):
+                    self.assertFalse(bridge.browser_on_main_display(42))
+        with patch.object(bridge.os, "readlink", return_value="/usr/bin/xterm"):
+            self.assertFalse(bridge.browser_on_main_display(42))
+
+    def test_container_keeps_non_root_sandbox_and_shared_session_bus(self):
+        root = Path(__file__).parent
+        for name in ("Dockerfile", "Dockerfile.managed"):
+            source = (root / name).read_text()
+            self.assertIn("python3-pyatspi", source)
+            self.assertIn("at-spi2-core", source)
+            self.assertIn("USER desktop", source)
+        startup = (root / "entrypoint.sh").read_text()
+        self.assertIn('exec dbus-run-session -- "$0" "$@"', startup)
+        self.assertIn("--force-renderer-accessibility", startup)
+        self.assertNotIn("  --no-sandbox", startup)
+
+
+class InputRegionServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cache_coalesces_concurrent_readers_and_expired_positions_are_never_reused(self):
+        service = bridge.BrowserInputRegions(timeout=0.02, cache_seconds=0.2)
+        sample = {**bridge.empty_input_regions(True), "regions": [{"x": 10, "y": 20, "width": 100, "height": 30}]}
+        service.read = AsyncMock(return_value=sample)
+        results = await asyncio.gather(*(service.get() for _ in range(8)))
+        self.assertTrue(all(item == sample for item in results))
+        self.assertEqual(service.read.await_count, 1)
+        service.cached_at = 0
+        async def blocked():
+            await asyncio.sleep(5)
+        service.read = blocked
+        result = await service.get()
+        self.assertFalse(result["available"])
+        self.assertEqual(result["regions"], [])
+        await service.close()
+
+    async def test_native_query_does_not_block_health_and_has_the_same_origin_restrictions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader = SimpleNamespace(get=AsyncMock(return_value=bridge.empty_input_regions(True)), close=AsyncMock())
+            client = TestClient(TestServer(bridge.create_app(directory, input_regions=reader)))
+            await client.start_server()
+            try:
+                response = await client.get("/browser/input-regions")
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertEqual((await response.json())["regions"], [])
+                self.assertEqual((await client.get("/browser/input-regions", headers={"Origin": "https://example.test"})).status, 403)
+                entered, release = asyncio.Event(), asyncio.Event()
+                async def delayed():
+                    entered.set()
+                    await release.wait()
+                    return bridge.empty_input_regions(True)
+                reader.get = delayed
+                pending = asyncio.create_task(client.get("/browser/input-regions"))
+                await entered.wait()
+                self.assertEqual((await asyncio.wait_for(client.get("/health"), 0.5)).status, 200)
+                release.set()
+                self.assertEqual((await pending).status, 200)
+            finally:
+                await client.close()
+            reader.close.assert_awaited_once()
 
 
 class FileTests(unittest.TestCase):

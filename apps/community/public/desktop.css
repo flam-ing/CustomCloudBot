@@ -62,6 +62,5 @@
 .workspace-chrome-viewport { position:relative; display:flex; flex:1; width:100%; min-height:0; min-width:0; overflow:hidden; background:#101216; }
 .workspace-chrome-viewport > div { flex:1; min-width:0; min-height:0; }
 .workspace-remote-keyboard { position:absolute; left:1px; bottom:1px; width:1px; height:1px; min-height:0; padding:0; border:0; opacity:.01; resize:none; font-size:16px; pointer-events:none; }
-.workspace-keyboard-toggle[aria-pressed="true"] { background:#b8a2df2b; color:#e6d8ff; box-shadow:inset 0 0 0 1px #b8a2df55; }
 @media(max-width:500px) { .workspace-popup { border-radius:12px; } .workspace-chrome-label { display:none; } .workspace-chrome-toolbar { gap:1px; padding:4px; } .workspace-chrome-toolbar .workspace-button { font-size:10px; } }
 @media(pointer:coarse) { .workspace-button { min-height:36px; min-width:34px; } .workspace-browser-toolbar { gap:2px; padding:5px; } .workspace-address { font-size:16px; } }

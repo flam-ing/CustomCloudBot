@@ -7,14 +7,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import WebSocket,{WebSocketServer} from 'ws';
 import {startCommunity} from '../server.mjs';
-import {workspacePath,workspaceEndpoint} from '../workspace.mjs';
+import {workspacePath,workspaceEndpoint,browserInputRegions} from '../workspace.mjs';
 
-async function fixture(t){
+async function fixture(t,{inputRegions=()=>({available:false,regions:[]})}={}){
   const requests=[],actions=[];
   const upstream=createServer((req,res)=>{
     requests.push({url:req.url,cookie:req.headers.cookie});
     res.setHeader('content-type','application/json');
     if(req.url==='/health')res.end(JSON.stringify({ok:true,terminal:true,files:true}));
+    else if(req.url==='/browser/input-regions')Promise.resolve(inputRegions()).then(data=>res.end(JSON.stringify(data)));
     else if(req.url.startsWith('/files?'))res.end(JSON.stringify({path:'',entries:[{name:'hello.txt',path:'hello.txt',type:'file',size:5,modified:0}]}));
     else if(req.url.startsWith('/file?'))res.end('hello');
     else {res.statusCode=404;res.end('{}');}
@@ -60,7 +61,7 @@ test('sidebar groups are per-user, membership is validated, deleting groups pres
 
 test('workspace browser and files require membership; browser actions and terminal tickets require CSRF',async t=>{
   const f=await fixture(t),root=`/api/rooms/${f.room}/workspace`;
-  for(const path of ['', '/browser/frame','/files','/file?path=hello.txt']){
+  for(const path of ['', '/browser/frame','/browser/input-regions','/files','/file?path=hello.txt']){
     assert.equal((await f.call(root+path)).status,401);assert.equal((await f.call(root+path,{auth:f.outsider})).status,404);
   }
   assert.deepEqual((await f.call(root,{auth:f.owner})).data,{browser:true,terminal:true,files:true,shared:true});
@@ -73,6 +74,56 @@ test('workspace browser and files require membership; browser actions and termin
   const download=await fetch(f.app.url+root+'/file?path=hello.txt',{headers:{cookie:f.owner.cookie}});
   assert.equal(download.headers.get('content-type'),'application/octet-stream');assert.match(download.headers.get('content-disposition'),/^attachment/);assert.equal(await download.text(),'hello');
   assert.ok(f.requests.every(req=>!req.cookie));
+});
+
+test('browser input regions expose bounded geometry and keyboard hints without page contents',()=>{
+  const good={x:12.5,y:110,width:300,height:42,inputMode:'email'};
+  const hidden={value:'secret',name:'Email',url:'https://private.example/',content:'private text'};
+  const result=browserInputRegions({available:true,title:'Private page',regions:[
+    {...good,...hidden}, {...good,inputMode:'password'}, {...good,x:-1}, {...good,width:Infinity},
+    {...good,height:NaN}, {...good,y:'110'}, {...good,width:0}, {...good,x:32760}, null,
+  ]});
+  assert.deepEqual(result,{available:true,regions:[good,{x:12.5,y:110,width:300,height:42}]});
+  assert.deepEqual(browserInputRegions({available:false,regions:[good]}),{available:false,regions:[]});
+  assert.deepEqual(browserInputRegions({available:true,regions:{...hidden}}),{available:false,regions:[]});
+  assert.deepEqual(browserInputRegions(null),{available:false,regions:[]});
+  assert.equal(browserInputRegions({available:true,regions:Array.from({length:300},()=>good)}).regions.length,256);
+});
+
+test('browser input metadata is membership-protected, coalesced across shared rooms, and never forwards page content',async t=>{
+  let finish;
+  const pending=new Promise(resolve=>{finish=resolve;});
+  const f=await fixture(t,{inputRegions:()=>pending});
+  const second=(await f.call('/api/rooms',{auth:f.owner,body:{name:'Second'}})).data.room.id;
+  const path=id=>`/api/rooms/${id}/workspace/browser/input-regions`;
+  const calls=[f.call(path(f.room),{auth:f.owner}),f.call(path(second),{auth:f.owner})];
+  await new Promise(resolve=>setTimeout(resolve,20));
+  finish({available:true,regions:[{x:50,y:80,width:200,height:30,inputMode:'search',value:'secret text',name:'private title'}],url:'https://private.example/'});
+  for(const result of await Promise.all(calls)){
+    assert.equal(result.status,200);
+    assert.deepEqual(result.data,{available:true,regions:[{x:50,y:80,width:200,height:30,inputMode:'search'}]});
+    assert.match(result.response.headers.get('cache-control'),/no-store/);
+  }
+  assert.equal((await f.call(path(f.room),{auth:f.owner})).status,200);
+  assert.equal(f.requests.filter(req=>req.url==='/browser/input-regions').length,1);
+  assert.equal((await f.call(path(f.room),{auth:f.outsider})).status,404);
+  assert.equal((await f.call(path(f.room))).status,401);
+  assert.equal((await f.call(path(f.room),{auth:f.owner,body:{}})).status,405);
+  assert.ok(f.requests.every(req=>!req.cookie));
+});
+
+for(const revoke of ['membership','session'])test(`browser input metadata is withheld when ${revoke} is revoked during the bridge request`,async t=>{
+  let started,finish;
+  const received=new Promise(resolve=>{started=resolve;}),pending=new Promise(resolve=>{finish=resolve;});
+  const f=await fixture(t,{inputRegions:()=>{started();return pending;}});
+  const request=f.call(`/api/rooms/${f.room}/workspace/browser/input-regions`,{auth:f.owner});
+  await received;
+  if(revoke==='membership')f.app.db.prepare('DELETE FROM room_members WHERE room_id=?').run(f.room);
+  else assert.equal((await f.call('/api/logout',{auth:f.owner,body:{}})).status,200);
+  finish({available:true,regions:[{x:1,y:1,width:10,height:10}]});
+  const result=await request;
+  assert.equal(result.status,revoke==='membership'?404:401);
+  assert.equal(result.data.regions,undefined);
 });
 
 function rejectedWs(url,headers){return new Promise((resolve,reject)=>{const ws=new WebSocket(url,{headers});ws.on('unexpected-response',(request,response)=>{response.resume();resolve(response.statusCode);request.destroy();});ws.on('error',reject);ws.on('open',()=>{ws.terminate();reject(new Error('Unexpected WebSocket acceptance'));});});}

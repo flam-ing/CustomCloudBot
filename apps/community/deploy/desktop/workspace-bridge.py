@@ -13,6 +13,7 @@ import re
 import signal
 import stat
 import struct
+import sys
 import termios
 import time
 from pathlib import Path
@@ -26,6 +27,176 @@ MAX_INPUT = 16 * 1024
 MAX_REPLAY = 64 * 1024
 MAX_PENDING = 128 * 1024
 SESSION_ID = re.compile(r"^[a-f0-9]{64}$")
+MAX_INPUT_REGIONS = 256
+MAX_ACCESSIBLE_NODES = 3500
+
+
+def browser_on_main_display(pid):
+    """Limit the native tree to Chrome on the browser's X display, never terminals."""
+    try:
+        pid = int(pid)
+        if pid <= 0 or Path(os.readlink(f"/proc/{pid}/exe")).name not in ("chrome", "google-chrome", "chromium"):
+            return False
+        with open(f"/proc/{pid}/environ", "rb") as source:
+            values = source.read(65536).split(b"\0")
+        return b"DISPLAY=:99" in values or b"DISPLAY=:99.0" in values
+    except (ValueError, TypeError, OSError):
+        return False
+
+
+def empty_input_regions(available=False):
+    return {"available": available, "regions": [], "observedAt": int(time.time() * 1000), "truncated": False}
+
+
+def collect_input_regions(desktop, atspi, browser_process=browser_on_main_display, budget=0.25):
+    """Read geometry and states only; never request accessible text, names or values."""
+    result = empty_input_regions(True)
+    deadline = time.monotonic() + budget
+    stack, seen, rectangles = [], set(), set()
+    # ACTIVE filters out covered/background Chrome windows and native dialogs.
+    for index in range(min(desktop.childCount, 64)):
+        if time.monotonic() >= deadline:
+            result["truncated"] = True
+            return result
+        try:
+            app = desktop[index]
+            if not browser_process(app.get_process_id()):
+                continue
+            # Avoid stale native state after a tab switch without registering a
+            # screen-reader event listener or collecting the page's text cache.
+            if hasattr(app, "setCacheMask"):
+                app.setCacheMask(atspi.cache.NONE)
+            for position in range(min(app.childCount, 64)):
+                window = app[position]
+                state = window.getState()
+                if all(state.contains(value) for value in (atspi.STATE_ACTIVE, atspi.STATE_VISIBLE, atspi.STATE_SHOWING)):
+                    stack.append(window)
+        except Exception:
+            continue
+    while stack:
+        if len(seen) >= MAX_ACCESSIBLE_NODES or len(result["regions"]) >= MAX_INPUT_REGIONS or time.monotonic() >= deadline:
+            result["truncated"] = True
+            break
+        node = stack.pop()
+        try:
+            if node in seen:
+                continue
+            seen.add(node)
+            state = node.getState()
+            if state.contains(atspi.STATE_DEFUNCT):
+                continue
+            visible = all(state.contains(value) for value in (atspi.STATE_VISIBLE, atspi.STATE_SHOWING))
+            if visible and state.contains(atspi.STATE_EDITABLE) and state.contains(atspi.STATE_ENABLED) and not state.contains(atspi.STATE_READ_ONLY):
+                bounds = node.queryComponent().getExtents(atspi.DESKTOP_COORDS)
+                x, y, width, height = (int(bounds.x), int(bounds.y), int(bounds.width), int(bounds.height))
+                width, height = min(x + width, 32768) - max(x, 0), min(y + height, 32768) - max(y, 0)
+                x, y = max(x, 0), max(y, 0)
+                if width > 0 and height > 0 and -32768 < x < 32768 and -32768 < y < 32768 and width <= 32768 and height <= 32768:
+                    rectangle = (x, y, width, height)
+                    if rectangle not in rectangles:
+                        rectangles.add(rectangle)
+                        result["regions"].append({"x": x, "y": y, "width": width, "height": height, "inputMode": "text"})
+                # The editable's text descendants add no independently editable area.
+                continue
+            remaining = MAX_ACCESSIBLE_NODES - len(seen) - len(stack)
+            children = min(node.childCount, max(remaining, 0))
+            if children < node.childCount:
+                result["truncated"] = True
+            for index in range(children - 1, -1, -1):
+                child = node[index]
+                if child is not None:
+                    stack.append(child)
+        except Exception:
+            # Defunct frame/navigation and unsupported Component interfaces are normal.
+            continue
+    return result
+
+
+def input_regions_worker():
+    """Isolate native DBus calls: a wedged application cannot block files or PTYs."""
+    try:
+        import pyatspi
+        from gi.repository import GLib
+        pyatspi.setTimeout(100, 200)
+        context = GLib.MainContext.default()
+    except (ImportError, ValueError, AttributeError):
+        pyatspi = None
+    for line in sys.stdin:
+        if line != "regions\n":
+            break
+        result = empty_input_regions()
+        if pyatspi is not None:
+            try:
+                # Drain native cache updates without running another event loop forever.
+                for _ in range(128):
+                    if not context.pending():
+                        break
+                    context.iteration(False)
+                desktop = pyatspi.Registry.getDesktop(0)
+                desktop.clearCache()
+                result = collect_input_regions(desktop, pyatspi)
+            except Exception:
+                pass
+        print(json.dumps(result, separators=(",", ":")), flush=True)
+
+
+class BrowserInputRegions:
+    """One bounded native reader and short shared cache for every viewing session."""
+
+    def __init__(self, timeout=1.2, cache_seconds=0.2):
+        self.timeout, self.cache_seconds = timeout, cache_seconds
+        self.process = None
+        self.lock = asyncio.Lock()
+        self.cached, self.cached_at = empty_input_regions(), 0
+        self.closed = False
+
+    async def stop_worker(self):
+        process, self.process = self.process, None
+        if process is not None:
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+            await process.wait()
+
+    async def read(self):
+        if self.process is None or self.process.returncode is not None:
+            await self.stop_worker()
+            self.process = await asyncio.create_subprocess_exec(
+                sys.executable, str(Path(__file__).resolve()), "--input-regions-worker",
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL, limit=65536,
+                env={**os.environ, "DISPLAY": ":99"})
+        self.process.stdin.write(b"regions\n")
+        await self.process.stdin.drain()
+        line = await self.process.stdout.readline()
+        if not line:
+            raise ValueError("Accessibility reader stopped")
+        return json.loads(line)
+
+    async def get(self):
+        if self.closed:
+            return empty_input_regions()
+        async with self.lock:
+            if self.closed:
+                return empty_input_regions()
+            if time.monotonic() - self.cached_at < self.cache_seconds:
+                return self.cached
+            try:
+                result = await asyncio.wait_for(self.read(), timeout=self.timeout)
+                if not isinstance(result, dict) or not isinstance(result.get("regions"), list) or len(result["regions"]) > MAX_INPUT_REGIONS:
+                    raise ValueError("Invalid accessibility response")
+                self.cached = result
+            except (TimeoutError, OSError, ValueError):
+                await self.stop_worker()
+                # Never keep old positions after a failed or timed-out refresh.
+                self.cached = empty_input_regions()
+            self.cached_at = time.monotonic()
+            return self.cached
+
+    async def close(self):
+        self.closed = True
+        async with self.lock:
+            await self.stop_worker()
 
 
 class HomeFiles:
@@ -337,9 +508,10 @@ def allowed_peer(address):
         return False
 
 
-def create_app(home="/home/desktop", idle_seconds=600, max_sessions=12):
+def create_app(home="/home/desktop", idle_seconds=600, max_sessions=12, input_regions=None):
     files = HomeFiles(home)
     terminals = Terminals(files.home, max_sessions=max_sessions, idle_seconds=idle_seconds)
+    browser_inputs = input_regions if input_regions is not None else BrowserInputRegions()
 
     @web.middleware
     async def private_network(request, handler):
@@ -357,6 +529,9 @@ def create_app(home="/home/desktop", idle_seconds=600, max_sessions=12):
 
     async def listing(request):
         return web.json_response(files.list(request.query.get("path", "")))
+
+    async def browser_input_regions(_request):
+        return web.json_response(await browser_inputs.get())
 
     async def download(request):
         body, name = files.read(request.query.get("path", ""))
@@ -407,6 +582,7 @@ def create_app(home="/home/desktop", idle_seconds=600, max_sessions=12):
         cleaner.cancel()
         await asyncio.gather(cleaner, return_exceptions=True)
         await terminals.close()
+        await browser_inputs.close()
         files.close()
 
     app = web.Application(middlewares=[private_network], client_max_size=MAX_INPUT * 6 + 1024)
@@ -415,10 +591,14 @@ def create_app(home="/home/desktop", idle_seconds=600, max_sessions=12):
     app.router.add_get("/files", listing)
     app.router.add_get("/file", download)
     app.router.add_get("/terminal", terminal)
+    app.router.add_get("/browser/input-regions", browser_input_regions)
     return app
 
 
 if __name__ == "__main__":
     if os.geteuid() == 0:
         raise SystemExit("Workspace bridge must run as the desktop user")
-    web.run_app(create_app(), host="0.0.0.0", port=6083, access_log=None, print=None)
+    if sys.argv[1:] == ["--input-regions-worker"]:
+        input_regions_worker()
+    else:
+        web.run_app(create_app(), host="0.0.0.0", port=6083, access_log=None, print=None)
