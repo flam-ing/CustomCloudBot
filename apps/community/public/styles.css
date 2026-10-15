@@ -1215,11 +1215,12 @@ button {
 .composer:focus-within { border-color:#ffffff35; box-shadow:0 8px 32px #0003,0 0 0 3px #ffffff03; }
 button { transition:background-color 150ms ease,color 150ms ease,opacity 150ms ease,box-shadow 150ms ease; }
 button:active:not(:disabled) { filter:brightness(.9); }
-.model-controls { gap:8px; flex-wrap:wrap; padding:2px 4px 8px; }
+.model-controls { align-items:center; gap:8px; flex-wrap:nowrap; padding:2px 4px 8px; }
+.model-controls > label:first-child { flex:0 1 auto; min-width:0; }
+.model-controls > label:nth-child(2) { flex:0 0 auto; }
+.model-controls .model-trigger { min-width:0; }
 .model-controls label { color:#aaaeb6; }
 .model-controls select { max-width:190px; border-color:#ffffff10; border-radius:8px; background:#ffffff05; padding:6px 8px; }
-.model-more { padding:6px 9px; border-radius:8px; background:transparent; color:#a6aab3; font-size:11px; white-space:nowrap; }
-.model-more:hover { background:#ffffff0b; color:#fff; }
 .model-browser { width:min(620px,calc(100vw - 28px)); max-height:min(720px,85dvh); padding:24px; border:1px solid #ffffff1b; border-radius:22px; background:#181a1e; color:#edf0f4; box-shadow:0 28px 100px #0009; overflow:auto; }
 .model-browser[open] { animation:panel-in 220ms var(--ease-out); }
 .model-browser::backdrop { background:#0008; backdrop-filter:blur(6px); }
@@ -1352,8 +1353,8 @@ button:active .agent-art { transform:scale(.94); }
 .capability-hub section { border-top:1px solid var(--line);margin-top:20px;padding-top:10px; }
 .capability-hub button { background:var(--surface);border-radius:8px;padding:8px 16px; }
 
-/* Session actions live inside the composer; the donut opens actual usage details. */
-.composer > .context-controls { display:flex; align-items:center; justify-content:flex-end; gap:4px; padding:6px 0 0; margin:2px 0 0; color:var(--muted); font-size:11px; }
+/* Usage stays beside model selection; the donut opens the context/Compact popup. */
+.model-controls > .context-controls { display:flex; align-items:center; justify-content:flex-end; flex:0 0 auto; gap:4px; padding:0; margin:0 0 0 auto; color:var(--muted); font-size:11px; }
 .context-controls .context-action { border:0; border-radius:7px; background:transparent; padding:5px 7px; color:#a6abb5; }
 .context-controls .context-action:hover:not(:disabled) { color:var(--text); background:#ffffff0a; }
 .context-controls .context-trigger { display:inline-flex; align-items:center; gap:6px; margin-left:4px; padding:4px 6px; border:0; border-radius:8px; color:#bfc5cf; background:transparent; }
@@ -1493,6 +1494,13 @@ button:active .agent-art { transform:scale(.94); }
 .message-send-error { color:#eea8b1; font-size:12px; }
 .context-controls .context-ring { width:27px; height:27px; }
 .context-controls .context-trigger { gap:8px; padding:5px 8px; }
+.model-controls .context-trigger { margin-left:0; }
+@media(max-width:420px) {
+  .model-controls { gap:6px; padding-inline:0; }
+  .model-controls label { gap:4px; }
+  .model-controls .effort-select { padding-inline:4px; }
+  .model-controls .context-trigger { gap:5px; padding-inline:3px; }
+}
 .context-compact-button { width:100%; padding:10px 14px; margin-top:14px; border:1px solid #b7a0ed44; border-radius:10px; background:#b7a0ed18; color:#e4d9fc; font-size:12px; }
 .context-compact-button:disabled { opacity:.4; cursor:default; }
 .context-popover progress { height:12px; border-radius:8px; }

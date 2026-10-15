@@ -1546,12 +1546,14 @@ function contextElement(tag, text, className) {
 }
 function renderContextMeter(context, form = $("#composer-form"), pane = null) {
   if(!form)return;
+  const toolbar=$(".model-controls",form);
+  if(!toolbar)return;
   let bar=$(".context-controls",form);
   if(!bar) {
     bar=contextElement("div",undefined,"context-controls");
     const trigger=contextElement("button",undefined,"context-trigger");trigger.type="button";trigger.setAttribute("aria-label","컨텍스트 및 API 사용량");trigger.setAttribute("aria-haspopup","dialog");trigger.setAttribute("aria-expanded","false");
     const ring=contextElement("span",undefined,"context-ring"),label=contextElement("span",undefined,"context-label");ring.setAttribute("aria-hidden","true");label.setAttribute("aria-hidden","true");trigger.append(ring,label);trigger.onclick=()=>openContextPopover(trigger,pane);
-    bar.append(trigger);form.append(bar);
+    bar.append(trigger);toolbar.append(bar);
     if(!pane){bar.id="context-controls";trigger.id="context-usage-button";ring.id="context-ring";label.id="context-label";}
   }
   const percent=contextPercent(context), owner=roomContextOwner(pane);
@@ -1741,7 +1743,6 @@ function updateModelAvailability() {
     const disabled=!owner.roomId||owner.busy;
     select.disabled=disabled;
     if(select._triggerButton)select._triggerButton.disabled=disabled;
-    if(select._moreButton)select._moreButton.disabled=disabled||!state.models.length;
     const form=select.closest("form");
     if(form) {
       const send=$('button[type="submit"]',form);
@@ -1823,13 +1824,6 @@ function applyModels(models) {
     }
     select._triggerButton.textContent=(select.selectedOptions[0]?.textContent||"자동 선택 · 추천")+" ▾";
     select.title="추천 모델 · 자동 선택은 연결 상태에 따라 순환합니다";
-    if(!select._moreButton){
-      const more=document.createElement("button");more.type="button";more.className="model-more";more.textContent="더 보기";
-      more.setAttribute("aria-label","전체 모델 검색");more.setAttribute("aria-haspopup","dialog");
-      more.onclick=()=>openModelBrowser(select,more);
-      select.parentElement.after(more);select._moreButton=more;
-    }
-    select._moreButton.disabled=!state.models.length;
   }
   updateModelAvailability();
 }

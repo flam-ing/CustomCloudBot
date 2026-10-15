@@ -143,13 +143,12 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .message-queue-actions button { background: #ffffff94; border-color: #b99bdb3a; color: var(--glass-accent-strong); }
 .message-queue-actions button:hover { background: #e7daf8; border-color: #b99bdb6e; }
 .message-queue-actions .message-queue-cancel { background: transparent; color: var(--muted); }
-.model-controls label, .model-more, .picker-eyebrow, .model-count, .model-card span,
+.model-controls label, .picker-eyebrow, .model-count, .model-card span,
 .quick-model-picker h2, .quick-model-more { color: var(--muted); }
 .model-controls select, .model-trigger {
   background: #ffffff85; color: var(--text); border-color: #ae91d035;
 }
 .model-trigger:hover { background: #f4ecfc; }
-.model-more:hover { background: var(--hover); color: var(--glass-accent-strong); }
 .model-card { background: #ffffff61; border-color: var(--line); }
 .model-card:hover { background: #fff; border-color: #b79bdb; }
 .model-card[aria-pressed="true"] { background: #e4d6f647; border-color: #a986d5; }
