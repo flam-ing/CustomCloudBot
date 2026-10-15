@@ -1,6 +1,7 @@
 import {createWorkspaceTerminal} from './workspace-terminal.js';
 import {configureDesktopInput,enterDesktopScreen} from './desktop-screen.js';
 import {createWorkspaceWindows,workspaceBounds} from './workspace-windows.js';
+import {createRemoteKeyboard} from './remote-keyboard.js';
 let popupLayer=40;
 const VIEWS=[['browser','브라우저'],['terminal','터미널'],['files','파일']];
 const el=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
@@ -53,13 +54,15 @@ export function createDesktopUI({api,getRoomId,getRoomName=()=>'',toast=()=>{},m
   };
 }
 function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,index,onClose}) {
-  const state={roomId,view:VIEWS.some(([id])=>id===initialView)?initialView:'browser',generation:0,abort:null,cleanup:null,destroyed:false,paths:new Map()};
+  const state={roomId,view:VIEWS.some(([id])=>id===initialView)?initialView:'browser',generation:0,abort:null,cleanup:null,destroyed:false,keyboardOpen:false,paths:new Map()};
   const panel=el('aside',undefined,'desktop-panel workspace-popup');panel.setAttribute('aria-label','작업 공간');panel.setAttribute('role','dialog');panel.dataset.roomId=roomId;panel.hidden=true;
   const head=el('div',undefined,'desktop-head'),title=el('strong','작업 공간'),actions=el('div',undefined,'workspace-window-actions'),maximize=actionButton('작업 공간 확대','□'),close=actionButton('작업 공간 닫기','×');close.classList.add('workspace-close');actions.append(maximize,close);head.append(title,actions);head.tabIndex=0;head.title='드래그하여 이동 · 방향키로 위치 이동';head.setAttribute('aria-label','작업 공간 창 이동');
   const resize=actionButton('작업 공간 크기 조절','');resize.className='workspace-resize-handle';resize.title='드래그 또는 방향키로 크기 조절';
-  let geometry=workspaceBounds({}, {width:innerWidth,height:innerHeight},(index%5)*28),beforeMaximize=null;
+  const viewportSize=()=>({width:innerWidth,height:state.keyboardOpen&&globalThis.visualViewport?.scale===1?Math.min(innerHeight,visualViewport.height):innerHeight});
+  let geometry=workspaceBounds({},viewportSize(),(index%5)*28),beforeMaximize=null,beforeKeyboard=null;
   const raise=()=>{panel.style.zIndex=String(++popupLayer);};
-  const layout=next=>{geometry=workspaceBounds(next,{width:innerWidth,height:innerHeight});for(const [key,value]of Object.entries(geometry))panel.style[key]=value+'px';};
+  const layout=next=>{geometry=workspaceBounds(next,viewportSize());for(const [key,value]of Object.entries(geometry))panel.style[key]=value+'px';};
+  const keyboardLayout=enabled=>{state.keyboardOpen=enabled;if(enabled){beforeKeyboard||={...geometry};layout(geometry);}else if(beforeKeyboard){const previous=beforeKeyboard;beforeKeyboard=null;layout(previous);}};
   const restore=()=>{beforeMaximize=null;maximize.textContent='□';maximize.setAttribute('aria-label','작업 공간 확대');};
   const setMaximized=()=>{if(beforeMaximize){const previous=beforeMaximize;restore();layout(previous);}else{beforeMaximize={...geometry};layout({left:8,top:8,width:innerWidth-16,height:innerHeight-16});maximize.textContent='❐';maximize.setAttribute('aria-label','작업 공간 크기 복원');}};
   let drag=null;
@@ -102,15 +105,16 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
     }catch(error){if(current(generation)){empty('작업 공간에 연결하지 못했습니다.');fail(error,generation);}}
   }
   function mountBrowser(base,generation,signal) {
-    const toolbar=el('div',undefined,'workspace-chrome-toolbar'),label=el('span','Chrome','workspace-chrome-label'),newTab=actionButton('Chrome 새 탭','새 탭'),incognito=actionButton('Chrome 시크릿 창','시크릿'),extensions=actionButton('Chrome 확장 프로그램','확장 프로그램'),fullscreen=actionButton('브라우저 전체 화면','전체 화면');
-    toolbar.append(label,newTab,incognito,extensions,fullscreen);
+    const toolbar=el('div',undefined,'workspace-chrome-toolbar'),label=el('span','Chrome','workspace-chrome-label'),newTab=actionButton('Chrome 새 탭','새 탭'),incognito=actionButton('Chrome 시크릿 창','시크릿'),extensions=actionButton('Chrome 확장 프로그램','확장 프로그램'),keyboardButton=actionButton('원격 키보드 열기','키보드'),fullscreen=actionButton('브라우저 전체 화면','전체 화면');
+    keyboardButton.classList.add('workspace-keyboard-toggle');
+    toolbar.append(label,newTab,incognito,extensions,keyboardButton,fullscreen);
     const viewport=el('div',undefined,'workspace-chrome-viewport');viewport.setAttribute('aria-label','원격 Chrome 브라우저');content.replaceChildren(toolbar,viewport);
-    let rfb=null,disposed=false,connected=false;
+    let rfb=null,keyboard=null,disposed=false,connected=false;
     const active=()=>!disposed&&current(generation)&&!signal.aborted;
-    const controls=()=>{for(const button of[newTab,incognito,extensions])button.disabled=!connected;};controls();
-    const shortcut=(key,shift=false)=>{if(connected&&active())sendChromeShortcut(rfb,key,shift);};
+    const controls=()=>{for(const button of[newTab,incognito,extensions,keyboardButton])button.disabled=!connected;};controls();
+    const shortcut=(key,shift=false)=>{if(connected&&active()){sendChromeShortcut(rfb,key,shift);keyboard?.focus({clear:true});}};
     newTab.onclick=()=>shortcut('t');incognito.onclick=()=>shortcut('n',true);
-    extensions.onclick=()=>{if(!connected)return;shortcut('t');shortcut('l');for(const char of 'chrome://extensions/')rfb.sendKey(char.charCodeAt(0),null);rfb.sendKey(0xff0d,'Enter');rfb.focus();};
+    extensions.onclick=()=>{if(!connected)return;shortcut('t');shortcut('l');for(const char of 'chrome://extensions/')rfb.sendKey(char.charCodeAt(0),null);rfb.sendKey(0xff0d,'Enter');if(!keyboard?.focus({clear:true}))rfb.focus();};
     fullscreen.onclick=()=>void enterDesktopScreen(panel);
     void(async()=>{
       try{
@@ -120,12 +124,14 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
         if(endpoint.origin!==location.origin||endpoint.pathname!==`/api/rooms/${roomId}/desktop/ws`)throw new Error('브라우저 연결 주소를 확인할 수 없습니다.');
         endpoint.protocol=location.protocol==='https:'?'wss:':'ws:';
         rfb=new RFB(viewport,endpoint.href,{shared:true});configureDesktopInput(rfb,false);rfb.qualityLevel=7;rfb.compressionLevel=3;
-        rfb.addEventListener('connect',()=>{if(!active())return;connected=true;controls();setStatus('Chrome · 탭과 프로필은 브라우저 메뉴에서 관리할 수 있습니다.','ready');});
-        rfb.addEventListener('disconnect',()=>{connected=false;controls();if(active())setStatus('Chrome 연결이 종료됐습니다. 다시 연결해주세요.','error');});
+        const readyStatus=()=>setStatus(keyboard?.enabled?'키보드 입력 중 · 입력칸을 누르면 이어서 입력할 수 있습니다.':matchMedia('(pointer:coarse)').matches?'입력칸을 선택한 뒤 키보드를 눌러 입력하세요.':'Chrome · 탭과 프로필은 브라우저 메뉴에서 관리할 수 있습니다.','ready');
+        keyboard=createRemoteKeyboard({rfb,viewport,button:keyboardButton,canInput:()=>connected&&active(),onChange:enabled=>{keyboardLayout(enabled);if(connected&&active())readyStatus();}});
+        rfb.addEventListener('connect',()=>{if(!active())return;connected=true;controls();readyStatus();});
+        rfb.addEventListener('disconnect',()=>{connected=false;keyboard?.setEnabled(false);controls();if(active())setStatus('Chrome 연결이 종료됐습니다. 다시 연결해주세요.','error');});
         rfb.addEventListener('securityfailure',()=>{if(active())setStatus('브라우저에 연결할 권한을 확인해주세요.','error');});
       }catch(error){if(active())fail(error,generation);}
     })();
-    return()=>{disposed=true;connected=false;controls();rfb?.disconnect();rfb=null;viewport.replaceChildren();};
+    return()=>{disposed=true;connected=false;controls();keyboard?.destroy();keyboard=null;rfb?.disconnect();rfb=null;viewport.replaceChildren();};
   }
   function mountFiles(base,roomId,generation,signal) {
     const toolbar=el('div',undefined,'workspace-files-toolbar'),up=actionButton('상위 폴더','↑'),root=actionButton('작업 폴더','⌂'),refresh=actionButton('파일 목록 새로고침','↻'),path=el('span','','workspace-file-path');toolbar.append(up,root,refresh,path);
@@ -170,6 +176,6 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
   close.onclick=onClose;retry.onclick=()=>void activate();
   panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.target===head){event.preventDefault();onClose();}});
   const visibility=()=>{if(document.hidden)stop();else if(!panel.hidden)void activate();};document.addEventListener('visibilitychange',visibility);
-  const viewportResize=()=>layout(beforeMaximize?{left:8,top:8,width:innerWidth-16,height:innerHeight-16}:geometry);window.addEventListener('resize',viewportResize);
-  return {open,close:hide,destroy(){if(state.destroyed)return;hide();state.destroyed=true;state.paths.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',viewportResize);panel.remove();}};
+  const viewportResize=()=>layout(beforeMaximize?{left:8,top:8,width:innerWidth-16,height:viewportSize().height-16}:geometry);window.addEventListener('resize',viewportResize);globalThis.visualViewport?.addEventListener('resize',viewportResize);
+  return {open,close:hide,destroy(){if(state.destroyed)return;hide();state.destroyed=true;state.paths.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',viewportResize);globalThis.visualViewport?.removeEventListener('resize',viewportResize);panel.remove();}};
 }

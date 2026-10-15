@@ -65,7 +65,7 @@ export function layoutBranches(rooms, links, {query = '', order = []} = {}) {
   // from it. A child can appear above its parent without losing their edge.
   const ranks = new Map();
   for (const id of Array.isArray(order) ? order : []) if (typeof id === 'string' && !ranks.has(id)) ranks.set(id, ranks.size);
-  const displayed = ranks.size ? [...rows].sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity) || a.index - b.index).map((row, index) => ({...row, index})) : rows;
+  const displayed = [...rows].sort((a, b) => Number(!!b.room.pinned) - Number(!!a.room.pinned) || (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity) || a.index - b.index).map((row, index) => ({...row, index}));
   return {rows: displayed, edges, laneCount: rows.length ? Math.max(...rows.map(row => row.lane)) + 1 : 0};
 }
 

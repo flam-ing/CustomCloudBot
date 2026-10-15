@@ -32,6 +32,9 @@
       xmlns="http://www.w3.org/2000/svg"
     >
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V3m-4 4 4-4 4 4M7 10H4v11h16V10h-3"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="m15 3 6 6-4 1-4 4v4l-3-3-6 6 6-6-3-3h4l4-4z"/></symbol>
       <symbol id="i-fork" viewBox="0 0 24 24"><path d="M4 12h6l8-8m-8 8 8 8M13 4h5v5m-5 11h5v-5"/></symbol>
       <symbol id="i-merge" viewBox="0 0 24 24"><path d="M6 4v6a4 4 0 0 0 4 4h8M14 10l4 4-4 4M6 20v-2"/></symbol>
       <symbol id="i-agent" viewBox="0 0 24 24"><path d="M7 4h10a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4Z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 10v3m8-3v3m-7 4h6M10 4V2m4 2V2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
@@ -194,6 +197,7 @@
             <div id="agent-presence" class="agent-presence" aria-label="에이전트"></div>
             <div class="sidebar-actions">
               <button id="sidebar-new-session" class="icon-button" type="button" aria-label="새 세션" title="새 세션"><svg class="icon"><use href="#i-plus" /></svg></button>
+              <div id="notification-center"></div>
               <button id="sidebar-search-toggle" class="icon-button" type="button" aria-label="세션 검색" title="세션 검색" aria-expanded="false" aria-controls="sidebar-search-wrap"><svg class="icon"><use href="#i-search" /></svg></button>
               <button
                 id="mobile-close"
@@ -285,9 +289,10 @@
                 <svg class="icon"><use href="#i-invite" /></svg>
               </button>
               <button id="voice-call-button" class="icon-button voice-call-button" type="button" aria-label="이 대화에 전화하기" title="이 대화에 전화하기"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg></button>
+              <button id="room-share-button" class="icon-button room-share-button" type="button" aria-label="대화 공유 및 다운로드" title="공유" disabled><svg class="icon" aria-hidden="true"><use href="#i-share"/></svg></button>
+              <button id="room-actions-button" class="icon-button room-actions-button" type="button" aria-label="대화 메뉴" title="고정·삭제" aria-haspopup="menu" aria-expanded="false" disabled><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button>
             </div>
           </header>
-          <div class="workspace-notifications"><div id="notification-center"></div></div>
           <div id="pane-grid" class="pane-grid" data-panes="1">
           <section id="empty-state" class="empty-state">
             <h2>새 대화</h2>

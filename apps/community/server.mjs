@@ -1067,6 +1067,7 @@ export async function startCommunity(options = {}) {
           "/profile-settings.js": ["profile-settings.js", "text/javascript"],
           "/profile-settings.css": ["profile-settings.css", "text/css"],
           "/room-sharing.js": ["room-sharing.js", "text/javascript"],
+          "/room-export.js": ["room-export.js", "text/javascript"],
           "/room-sharing.css": ["room-sharing.css", "text/css"],
           "/media/agent/idle.webp": ["media/agent/idle.webp", "image/webp"],
           "/media/agent/idle-poster.webp": ["media/agent/idle-poster.webp", "image/webp"],
@@ -1113,6 +1114,7 @@ export async function startCommunity(options = {}) {
           "/glass.css": ["glass.css", "text/css"],
           "/composer-attachments.mjs": ["composer-attachments.mjs", "text/javascript"],
           "/desktop-screen.js": ["desktop-screen.js", "text/javascript"],
+          "/remote-keyboard.js": ["remote-keyboard.js", "text/javascript"],
           "/desktop.js": ["desktop.js", "text/javascript"],
           "/desktop.css": ["desktop.css", "text/css"],
           "/workspace-terminal.js": ["workspace-terminal.js", "text/javascript"],
@@ -1742,10 +1744,27 @@ export async function startCommunity(options = {}) {
         throw failure(404,"찾을 수 없습니다.");
       }
       const match = url.pathname.match(
-        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage|routines))?$/,
+        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage|routines|export))?$/,
       );
       if (!match) throw failure(404, "찾을 수 없습니다.");
       const room = roomFor(match[1], user);
+      if (match[2] === "export" && method === "GET") {
+        // A stable boundary excludes messages arriving while a download is paged.
+        // Recheck room membership on every page; never export settings or tokens.
+        const number = (name, fallback) => {
+          const raw = url.searchParams.get(name);
+          if (raw === null) return fallback;
+          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw failure(400, "내보내기 범위가 올바르지 않습니다.");
+          return Number(raw);
+        };
+        const after = number("after", 0);
+        const through = number("through", db.prepare("SELECT COALESCE(max(rowid),0) n FROM messages WHERE room_id=?").get(room.id).n);
+        if (after > through || (after > 0 && !url.searchParams.has("through"))) throw failure(400, "내보내기 범위를 다시 선택해 주세요.");
+        const rows = db.prepare("SELECT rowid sequence,id,kind,author,text,created_at createdAt FROM messages WHERE room_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT 201").all(room.id, after, through);
+        const more = rows.length > 200, page = rows.slice(0, 200);
+        const messages = page.map(({sequence, ...message}) => ({...message, attachments: db.prepare("SELECT a.name,a.mime,a.size,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id)}));
+        return reply(res, 200, {room:{id:room.id,name:room.name},messages,through,next:more ? page.at(-1).sequence : null});
+      }
       if(match[2]==="routines") {
         if(method==="GET") return reply(res,200,{routines:await routines.list(user.id,room.id)});
         if(method==="POST") return reply(res,201,{routine:await routines.create(user.id,room.id,validateRoutineModel(body))});

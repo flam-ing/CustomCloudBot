@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import {layoutBranches, relatedBranchIds, branchGraphGeometry, branchDisplayName} from '../public/branch-graph.mjs';
 const rooms = ['root','a','b','deep','merge','other'].map((id, i) => ({id, name:id, createdAt:i+1}));
 const links = [{id:'a',parent:'root'},{id:'b',parent:'root'},{id:'deep',parent:'a'},{id:'merge',parent:'deep',mergedFrom:'b'}];
+test('pinning moves sessions above manual order without rewriting lineage and unpinning restores order', () => {
+  const order=['other','root','a','deep','b','merge'];
+  const baseline=layoutBranches(rooms,links,{order});
+  const pinned=rooms.map(room=>({...room,pinned:room.id==='merge'||room.id==='deep'}));
+  const result=layoutBranches(pinned,links,{order});
+  assert.deepEqual(result.rows.map(row=>row.id),['deep','merge','other','root','a','b']);
+  assert.deepEqual(result.edges,baseline.edges);
+  assert.deepEqual(result.rows.map(row=>row.index),[0,1,2,3,4,5]);
+  assert.deepEqual(result.rows.find(row=>row.id==='merge').parents,['deep','b']);
+  assert.deepEqual(layoutBranches(pinned.map(room=>({...room,pinned:false})),links,{order}).rows.map(row=>row.id),order);
+  assert.equal(layoutBranches(pinned,links,{query:'no match'}).rows.length,0);
+});
 test('parents precede children and a merge retains both real parents and colored lanes', () => {
   const result=layoutBranches(rooms,links), byId=new Map(result.rows.map(row=>[row.id,row]));
   assert.equal(result.edges.length,5); assert(result.laneCount>1);

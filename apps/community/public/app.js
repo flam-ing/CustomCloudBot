@@ -541,12 +541,18 @@ async function updateRoomListPreference(room, changes) {
     if(userId!==state.session?.user?.id||epoch!==sidebarEpoch)return false;
     const current=state.rooms.find(item=>item.id===room.id);if(!current)return false;Object.assign(current,prefs);
     if(prefs.archived && state.selectedRoom===room.id) {
-      const next=state.rooms.find(r=>!r.archived);
+      const next=state.extra.map(pane=>state.rooms.find(item=>item.id===pane.roomId&&!item.archived)).find(Boolean)||state.rooms.find(r=>!r.archived);
       if(next) await selectRoom(next.id); else showEmpty();
+      if(userId!==state.session?.user?.id||epoch!==sidebarEpoch)return false;
     }
     if(prefs.archived) {
+      desktopUI?.closeRoom(room.id);
       state.extra.filter(pane => pane.roomId === room.id).forEach(pane => clearAttachmentDraft(pane));
       state.extra=state.extra.filter(p=>p.roomId!==room.id);
+      const count=state.extra.length+1;
+      state.layout=count;state.focusPane=0;$("#pane-grid").dataset.panes=String(count);
+      dockRects=Array.from({length:count},(_,index)=>({x:index/count,y:0,w:1/count,h:1}));
+      $("#room-view").classList.toggle("is-focus",count>1);
       renderExtraPanes();
     }
     renderRooms();return true;
@@ -560,6 +566,38 @@ function sidebarRoomButton(room) {
   const name=document.createElement("strong");name.textContent=(room.pinned?"· ":"")+room.name;
   const meta=document.createElement("small");meta.textContent=`${room.memberCount||0}명 · ${room.description||"공동 대화"}`;
   copy.append(name,meta);button.append(roomIcon,copy);button.addEventListener("click",()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,room.id);else selectRoom(room.id);closeSidebar();});return button;
+}
+function confirmRemoveConversation(room) {
+  if (room.archived) return void updateRoomListPreference(room, {archived:false});
+  const userId = state.session?.user?.id, epoch = sidebarEpoch;
+  const dialog = document.createElement("dialog"); dialog.className = "quick-model-picker session-delete-dialog";
+  dialog.setAttribute("aria-label", "대화 삭제");
+  const title = contextElement("h2", "대화를 삭제할까요?");
+  const text = contextElement("p", "내 목록에서 삭제합니다. 계정 메뉴의 ‘대화 복원’에서 되돌릴 수 있으며 다른 참여자의 대화는 유지됩니다.");
+  const cancel = contextElement("button", "취소"), confirm = contextElement("button", "삭제", "session-delete-confirm");
+  cancel.type = confirm.type = "button";
+  cancel.onclick = () => dialog.close();
+  confirm.onclick = async () => {
+    if (state.session?.user?.id !== userId || sidebarEpoch !== epoch) { dialog.close(); return; }
+    confirm.disabled = true;
+    if (await updateRoomListPreference(room, {archived:true})) dialog.close();
+    else confirm.disabled = false;
+  };
+  const buttons = contextElement("div", undefined, "session-delete-actions"); buttons.append(cancel, confirm);
+  dialog.append(title, text, buttons); dialog.onclose = () => dialog.remove(); document.body.append(dialog); dialog.showModal(); cancel.focus();
+}
+function openSessionActions(roomId, trigger) {
+  const room = state.rooms.find(item => item.id === roomId);
+  if (!room || room.id === MONITOR_ROOM) return;
+  openComposerPicker(trigger, "대화 메뉴", [
+    {label:room.pinned ? "고정 해제" : "상단에 고정", detail:"내 대화 목록", select:() => void updateRoomListPreference(room, {pinned:!room.pinned})},
+    {label:room.archived ? "대화 복원" : "대화 삭제", danger:!room.archived, select:() => confirmRemoveConversation(room)},
+  ]);
+}
+function syncSessionActions() {
+  const room = state.rooms.find(item => item.id === state.selectedRoom), enabled = !!room && room.id !== MONITOR_ROOM;
+  for (const selector of ["#room-share-button", "#room-actions-button"]) $(selector).disabled = !enabled;
+  $(".topbar-actions").classList.toggle("no-conversation", !enabled);
 }
 function currentBranchId() {
   return state.focusPane > 0 ? state.extra[state.focusPane - 1]?.roomId : state.selectedRoom;
@@ -592,7 +630,7 @@ function syncSessionColors(colors = sessionColors(state.rooms, state.forks)) {
 }
 function renderRooms() {
   const focus = els.roomList.contains(document.activeElement) ? {roomId: document.activeElement.dataset.roomId, action: document.activeElement.dataset.branchAction} : null;
-  renderAccountTools(); els.roomList.replaceChildren(); updateBranchControls();
+  renderAccountTools(); els.roomList.replaceChildren(); updateBranchControls(); syncSessionActions();
   const colors = sessionColors(state.rooms, state.forks);
   if (showDeletedRooms) {
     const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM);
@@ -621,7 +659,8 @@ function renderRooms() {
       const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
       button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
       const copy=document.createElement("span"); copy.className="branch-row-copy";
-      const name=document.createElement("strong"); name.textContent=(row.room.pinned?"· ":"")+branchDisplayName(row);
+      const name=document.createElement("strong"); name.textContent=branchDisplayName(row);
+      if(row.room.pinned){const pin=icon("pin");pin.classList.add("branch-pin");pin.setAttribute("aria-label","고정됨");name.prepend(pin);}
       const meta=document.createElement("small"), parentNames=row.parents.map(id=>byId.get(id)?.room.name).filter(Boolean);
       const relation=row.operation==="merge"?"Merge":row.operation==="fork"?"Fork":"줄기";
       meta.textContent=(row.operation==="merge"?"합친 대화":row.operation==="fork"?"이어진 대화":"")+(row.room.pinned?" · 고정":"");
@@ -1807,8 +1846,10 @@ async function joinRoom(event) {
   }
 }
 async function makeInvite(path, title) {
+  const userId = state.session?.user?.id, epoch = sidebarEpoch;
   try {
     const data = await api(path, { method: "POST", body: "{}" });
+    if(state.session?.user?.id !== userId || sidebarEpoch !== epoch)return;
     $("#invite-token").textContent = createInviteLink(title, data.token);
     $("#invite-expires").textContent = data.expiresAt
       ? `만료: ${formatDate(data.expiresAt)}`
@@ -1820,7 +1861,7 @@ async function makeInvite(path, title) {
     $("#invite-dialog").dataset.title = title;
     openDialog($("#invite-dialog"));
   } catch (error) {
-    toast(error.message);
+    if(state.session?.user?.id === userId && sidebarEpoch === epoch)toast(error.message);
   }
 }
 function closeSidebar() {
@@ -1953,7 +1994,7 @@ function openComposerPicker(trigger,title,options,{after}={}) {
   const element=contextElement("div",undefined,"composer-picker");element.setAttribute("role","menu");element.setAttribute("aria-label",title);element.setAttribute("popover","auto");
   element.append(contextElement("div",title,"picker-heading"));
   for(const option of options) {
-    const button=contextElement("button",undefined,"picker-option");button.type="button";button.setAttribute("role","menuitemradio");button.setAttribute("aria-checked",String(!!option.selected));
+    const button=contextElement("button",undefined,"picker-option"+(option.danger?" is-danger":""));button.type="button";button.setAttribute("role",typeof option.selected==="boolean"?"menuitemradio":"menuitem");if(typeof option.selected==="boolean")button.setAttribute("aria-checked",String(option.selected));
     const copy=contextElement("span",undefined,"picker-option-copy");copy.append(contextElement("span",option.label,"picker-option-label"));
     if(option.detail)copy.append(contextElement("span",option.detail,"picker-option-detail"));
     button.append(copy,contextElement("span",option.selected?"✓":"","picker-check"));
@@ -2113,6 +2154,12 @@ function renderExtraPanes() {
     callButton.setAttribute("aria-label", "이 대화에 전화하기"); callButton.title = "이 대화에 전화하기";
     callButton.disabled = !room || room.archived || room.id === MONITOR_ROOM;
     callButton.onclick = () => voiceUI?.open(room); header.append(callButton);
+    const shareButton = contextElement("button", undefined, "icon-button room-share-button"); shareButton.type = "button"; shareButton.append(icon("share"));
+    shareButton.setAttribute("aria-label", "대화 공유 및 다운로드"); shareButton.title = "공유"; shareButton.disabled = !room || room.id === MONITOR_ROOM;
+    shareButton.onclick = () => sharingUI?.open(state.rooms.find(item => item.id === pane.roomId)); header.append(shareButton);
+    const menuButton = contextElement("button", undefined, "icon-button room-actions-button"); menuButton.type = "button"; menuButton.append(icon("more"));
+    menuButton.setAttribute("aria-label", "대화 메뉴"); menuButton.title = "고정·삭제"; menuButton.setAttribute("aria-haspopup", "menu"); menuButton.setAttribute("aria-expanded", "false"); menuButton.disabled = !room || room.id === MONITOR_ROOM;
+    menuButton.onclick = () => openSessionActions(pane.roomId, menuButton); header.append(menuButton);
 
     const list = document.createElement("div");
     list.className = "message-list";
@@ -2439,6 +2486,8 @@ function bind() {
     els.memberPanel.classList.remove("is-open"),
   );
   $("#room-invite-button").addEventListener("click", () => sharingUI?.open(state.roomData?.room || state.rooms.find(room=>room.id===state.selectedRoom)));
+  $("#room-share-button").addEventListener("click", () => sharingUI?.open(state.rooms.find(room=>room.id===state.selectedRoom)));
+  $("#room-actions-button").addEventListener("click", event => openSessionActions(state.selectedRoom, event.currentTarget));
   $("#profile-customize").addEventListener("click", toggleProfileMenu);
   $("#profile-menu").addEventListener("close",()=>$("#profile-customize").setAttribute("aria-expanded","false"));
   document.addEventListener("pointerdown",event=>{
@@ -2539,6 +2588,7 @@ if (workspaceButton) {
   const monitor = document.createElementNS("http://www.w3.org/2000/svg", "svg"); monitor.setAttribute("class", "icon"); monitor.setAttribute("viewBox", "0 0 24 24"); monitor.setAttribute("aria-hidden", "true");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", "M4 4h16v12H4zM12 16v4m-4 0h8"); monitor.append(path); workspaceButton.replaceChildren(monitor);
   workspaceButton.setAttribute("aria-label", "작업 공간 열기 또는 닫기"); workspaceButton.title = "작업 공간";
+  workspaceButton.parentElement.insertBefore(workspaceButton, $("#voice-call-button"));
 }
 setupUI = createBotSetupUI({ api, getSession: () => state.session, onSaved: refreshSetupState, toast });
 mailUI = createMailUI({ api, getSession: () => state.session, toast, openRoom: async id => {await loadRooms();await selectRoom(id);} });
@@ -2558,7 +2608,7 @@ function applyDockLayout() {
   else if (!split && topbar.parentElement !== main) main.insertBefore(topbar, grid);
   topbar.classList.toggle("pane-bar", split);
   const actions = $(".topbar-actions");
-  const toolsHost = split ? topbar : $("#composer-form .composer-tools");
+  const toolsHost = topbar;
   if (actions && actions.parentElement !== toolsHost) toolsHost.append(actions);
   dockPanels().forEach((panel, index) => {
     panel.dataset.dockIndex = index;
@@ -2761,14 +2811,7 @@ function setupDock() {
       }
       if(sidebarState.loaded&&sidebarState.groups.length&&targetRoom.id!==MONITOR_ROOM)addAction("그룹으로 이동",()=>openRoomGroupPicker(targetRoom));
       addAction(targetRoom.pinned?"고정 해제":"상단에 고정",()=>updateRoomListPreference(targetRoom,{pinned:!targetRoom.pinned}));
-      addAction(targetRoom.archived?"대화 복원":"대화 삭제",()=>{
-        if(targetRoom.archived) return updateRoomListPreference(targetRoom,{archived:false});
-        const dialog=document.createElement("dialog");dialog.className="quick-model-picker";
-        const text=document.createElement("p");text.textContent="내 대화 목록에서 삭제할까요? 삭제한 대화에서 복원할 수 있으며 다른 참여자의 대화는 유지됩니다.";
-        const confirm=document.createElement("button");confirm.textContent="삭제";confirm.onclick=()=>{dialog.close();updateRoomListPreference(targetRoom,{archived:true});};
-        const cancel=document.createElement("button");cancel.textContent="취소";cancel.onclick=()=>dialog.close();
-        dialog.append(text,confirm,cancel);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
-      });
+      addAction(targetRoom.archived?"대화 복원":"대화 삭제",()=>confirmRemoveConversation(targetRoom));
     }
     const reset=document.createElement("button");reset.type="button";reset.setAttribute("role","menuitem");reset.textContent="분할 닫기";reset.onclick=()=>{state.layout=2;setLayout(2);dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();hide();};menu.append(reset);
     menu.hidden=false;Object.assign(menu.style,{left:Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+"px",top:Math.max(8,Math.min(event.clientY,innerHeight-menu.offsetHeight-8))+"px"});action.focus();

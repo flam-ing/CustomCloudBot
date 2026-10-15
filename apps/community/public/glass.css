@@ -227,20 +227,26 @@ dialog::backdrop,
   border-color: rgba(255, 255, 255, .60);
 }
 .sidebar-search-wrap input:focus { border-color: rgba(151, 123, 187, .42); }
-.workspace-notifications .notification-bell {
+.main-panel:not(.is-split) > .topbar > .topbar-actions .icon-button {
   color: var(--muted);
   background: rgba(255, 255, 255, .24);
   border: 1px solid rgba(255, 255, 255, .38);
-  border-radius: 50%;
+  border-radius: 11px;
   box-shadow: 0 2px 12px rgba(45, 62, 89, .03);
   -webkit-backdrop-filter: var(--glass-backdrop);
   backdrop-filter: var(--glass-backdrop);
 }
-.workspace-notifications .notification-bell:hover,
-.workspace-notifications .notification-bell[aria-expanded="true"] {
+.main-panel:not(.is-split) > .topbar > .topbar-actions .icon-button:hover,
+.main-panel:not(.is-split) > .topbar > .topbar-actions .icon-button[aria-expanded="true"] {
   color: var(--text);
   background: rgba(255, 255, 255, .46);
 }
+.sidebar-header .notification-bell { color:var(--muted); background:transparent; }
+.sidebar-header .notification-bell:hover,.sidebar-header .notification-bell[aria-expanded="true"] { color:var(--text); background:rgba(255,255,255,.40); }
+.sidebar-header .notification-badge { top:5px; right:5px; width:8px; min-width:8px; height:8px; padding:0; border:0; background:#488ff5; font-size:0; box-shadow:0 0 0 2px rgba(245,247,252,.85); }
+.composer-picker .picker-option.is-danger { color:#a33755; }
+.session-delete-actions button { color:var(--text); background:rgba(255,255,255,.5); }
+.session-delete-actions .session-delete-confirm { color:#a33755; background:rgba(210,71,103,.1); }
 .auth-panel {
   width: min(392px, 100%);
   padding: 30px 32px;

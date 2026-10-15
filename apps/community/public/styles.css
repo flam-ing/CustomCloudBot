@@ -1590,9 +1590,18 @@ button:active .agent-art { transform:scale(.94); }
 .session-drag-handle { display:none; flex:none; width:28px; height:38px; align-items:center; justify-content:center; margin-left:auto; color:var(--muted); touch-action:none; }
 .session-drag-handle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; opacity:.6; }
 .session-dragging,.session-dragging * { cursor:grabbing!important; }
-.workspace-notifications { position:absolute; z-index:25; top:max(10px,env(safe-area-inset-top)); right:max(14px,env(safe-area-inset-right)); }
-.workspace-notifications .notification-bell { width:38px; height:38px; }
-.main-panel.is-split .pane-grid { margin-top:50px; }
+.sidebar-header .notification-bell { width:36px; height:36px; border-radius:11px; }
+.main-panel.is-split .pane-grid { margin-top:0; }
+.main-panel:not(.is-split) > .topbar > .topbar-actions { position:absolute; top:max(10px,env(safe-area-inset-top)); right:max(14px,env(safe-area-inset-right)); z-index:5; display:flex; gap:3px; flex-wrap:nowrap; }
+.main-panel:not(.is-split) > .topbar > .topbar-actions .icon-button { width:36px; height:36px; border:0; border-radius:11px; padding:7px; }
+.topbar-actions.no-conversation { display:none!important; }
+.main-panel:not(.is-split) > .topbar > .topbar-actions .demo-badge { display:none; }
+.branch-row-copy .branch-pin { display:inline-block; width:12px; height:12px; margin-right:5px; vertical-align:-1px; }
+.session-delete-dialog { width:min(360px,calc(100vw - 32px)); padding:22px; border-radius:20px; }
+.session-delete-dialog h2 { font-size:17px; margin:0 0 12px; }
+.session-delete-dialog p { font-size:13px; line-height:1.65; color:var(--muted); }
+.session-delete-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+.session-delete-actions button { min-height:40px; padding:8px 16px; border:0; border-radius:11px; font:inherit; cursor:pointer; }
 .composer { display:flex; flex-direction:column; gap:3px; }
 .composer-tools { display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:0 4px; gap:8px; }
 .composer-tools > .context-controls { margin-left:auto; padding:0; }
@@ -1628,7 +1637,7 @@ button:active .agent-art { transform:scale(.94); }
   .composer-footer .model-trigger { max-width:190px; }
   .composer-footer .model-trigger,.composer-footer .effort-trigger { font-size:11px; padding:6px; }
   .composer-tools .context-trigger { padding:3px 4px; }
-  .workspace-notifications { right:10px; }
+  .main-panel:not(.is-split) > .topbar > .topbar-actions { right:10px; }
   .picker-option { min-height:48px; }
 }
 @media(prefers-reduced-motion:reduce) { .composer-picker { animation:none; } }
@@ -1637,3 +1646,11 @@ button:active .agent-art { transform:scale(.94); }
 .composer-tools > .context-controls { order:1; }
 
 .session-dragging .sidebar-scrim { pointer-events:none; }
+.sidebar-header { padding-left:12px; padding-right:12px; gap:6px; }
+.sidebar-header .agent-presence { width:44px; height:44px; }
+.main-panel.is-split .pane-bar > .icon-button,.main-panel.is-split .pane-bar > .voice-call-button { flex:none; width:28px; height:30px; padding:5px; }
+.main-panel.is-split .pane-bar > .icon-button .icon,.main-panel.is-split .pane-bar > .voice-call-button .icon { width:18px; height:18px; }
+@media(pointer:coarse) {
+  .sidebar-header .icon-button,.sidebar-header .notification-bell { width:40px; height:40px; }
+  .main-panel:not(.is-split) > .topbar > .topbar-actions .icon-button { width:40px; height:40px; }
+}
