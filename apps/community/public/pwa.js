@@ -52,13 +52,14 @@ export function createPwaController({ api, getSession, toast = () => {} }) {
     if (pushButton) {
       pushButton.classList.toggle("is-hidden", !state.session);
       pushButton.disabled = state.pushBusy;
-      pushButton.textContent = state.subscription ? "알림 끄기" : permission === "denied" ? "알림 차단 안내" : "알림 켜기";
+      pushButton.textContent = state.subscription ? "기기 알림 끄기" : permission === "denied" ? "기기 알림 차단 안내" : "기기 알림 켜기";
+      pushButton.setAttribute("aria-pressed", String(Boolean(state.subscription)));
     }
     if (testPushButton) {
       testPushButton.classList.toggle("is-hidden", !state.session || !state.subscription);
       testPushButton.disabled = state.pushBusy;
     }
-    if (pushStatus) pushStatus.textContent = !state.session ? "" : state.subscription ? "이 기기에 새 메시지 알림을 보내요." : !state.supported ? "이 환경의 알림 지원 방법을 확인할 수 있어요." : permission === "denied" ? "브라우저 설정에서 이 사이트의 알림을 허용해주세요." : state.config && !state.config.configured ? "서버의 푸시 알림 설정이 아직 준비되지 않았어요." : "브라우저 알림은 직접 켤 때만 요청해요.";
+    if (pushStatus) pushStatus.textContent = !state.session ? "" : state.subscription ? "앱을 닫아도 이 기기로 알려줘요. 소리는 기기 설정을 따라요." : !state.supported ? "이 환경의 알림 지원 방법을 확인할 수 있어요." : permission === "denied" ? "브라우저 설정에서 이 사이트의 알림을 허용해주세요." : state.config && !state.config.configured ? "서버의 푸시 알림 설정이 아직 준비되지 않았어요." : "앱을 닫았을 때도 받으려면 기기 알림을 켜주세요.";
   };
   const syncSubscription = async (subscription, epoch) => {
     if (!subscription || !current(epoch)) return false;

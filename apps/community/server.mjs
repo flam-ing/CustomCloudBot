@@ -21,6 +21,7 @@ import { createSetupVault } from "./setup-vault.mjs";
 import { serviceIdentity } from "./identity.mjs";
 import { createMailbox } from "./mailbox.mjs";
 import { createMailAgent } from "./mail-agent.mjs";
+import { createNotifications } from "./notifications.mjs";
 import { createRoutines } from "./routines.mjs";
 import { verifyMail } from "./mail-auth.mjs";
 import { SUBSCRIPTION_CONNECTIONS } from "./subscription-connections.mjs";
@@ -533,8 +534,9 @@ export async function startCommunity(options = {}) {
     authorId = null,
     nonce = null,
   ) {
+    const messageId = randomUUID();
     db.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)").run(
-      randomUUID(),
+      messageId,
       roomId,
       kind,
       authorId,
@@ -543,6 +545,7 @@ export async function startCommunity(options = {}) {
       nonce,
       Date.now(),
     );
+    notifications.emit({roomId,messageId,kind,authorId});
     void push.notifyRoom(roomId, kind, authorId).catch(() => {});
   }
   function insertMessageWithAttachments(roomId, author, content, authorId, nonce, attachmentIds, queued = false) {
@@ -553,6 +556,7 @@ export async function startCommunity(options = {}) {
       if (result.changes !== 1) throw failure(400, "첨부 파일을 사용할 수 없습니다.");
       db.prepare("INSERT INTO message_attachments VALUES(?,?)").run(messageId, id);
     }
+    notifications.emit({roomId,messageId,kind:"human",authorId});
     return messageId;
   }
   function reserve(userId, cost) {
@@ -986,6 +990,9 @@ export async function startCommunity(options = {}) {
   }
   const mailAgent=createMailAgent({db,mailbox,env,verifyMail:options.verifyMail ?? verifyMail,
     runTask:runMailTask,canRunTask:()=>!closing && configured && jobs.size<2});
+  const notifications=createNotifications({db,mailbox,roomFor,canEmailRoom:room=>!isMailRoom(room),
+    getName:()=>setupVault.name,getOrigin:()=>requestOrigins.appOrigin || origin || boundOrigin,
+    ...(options.notificationNow ? {now:options.notificationNow} : {})});
 
   function routineOwner(ownerId, roomId) {
     const owner=db.prepare("SELECT id,username,display_name AS displayName,role FROM users WHERE id=?").get(ownerId);
@@ -1539,6 +1546,14 @@ export async function startCommunity(options = {}) {
           { "set-cookie": "community_session=; " + cookieFlags + " Max-Age=0" },
         );
       }
+      if (url.pathname === "/api/notifications/settings" && method === "GET")
+        return reply(res,200,notifications.settings(user));
+      if (url.pathname === "/api/notifications/settings" && method === "POST")
+        return reply(res,200,notifications.configure(user,body));
+      if (url.pathname === "/api/notifications" && method === "GET")
+        return reply(res,200,notifications.list(user,url.searchParams.get("after")));
+      if (url.pathname === "/api/notifications/read" && method === "POST")
+        return reply(res,200,notifications.markRead(user,body));
       if (url.pathname === "/api/push/config" && method === "GET")
         return reply(res, 200, { configured: push.configured, publicKey: push.configured ? env.COMMUNITY_PUSH_PUBLIC_KEY : null });
       if (url.pathname === "/api/push/subscriptions" && method === "POST") {
@@ -1571,7 +1586,7 @@ export async function startCommunity(options = {}) {
         let accepted;
         try { accepted = await push.sendTest(row); } catch { throw failure(502, "푸시 알림을 전송하지 못했습니다."); }
         if (!accepted) throw failure(410, "알림 구독이 만료되었습니다. 알림을 다시 켜주세요.");
-        return reply(res, 202, accepted());
+        return reply(res, 202, {accepted:true});
       }
       if (url.pathname === "/api/admin/invites" && method === "POST") {
         if (user.role !== "admin")
@@ -1956,6 +1971,7 @@ export async function startCommunity(options = {}) {
   boundOrigin =
     "http://" + (host === "::1" ? "[::1]" : host) + ":" + server.address().port;
   mailAgent.start();
+  notifications.start();
   routines.start();
   scheduleQueueDrain();
   let closePromise;
@@ -1963,6 +1979,7 @@ export async function startCommunity(options = {}) {
     server,
     db,
     mailAgent,
+    notifications,
     routines,
     url: boundOrigin,
     close: () =>
@@ -1975,6 +1992,7 @@ export async function startCommunity(options = {}) {
         for (const controller of controllers) controller.abort();
         await queueDrainPromise;
         await mailAgent.close();
+        await notifications.close();
         await routines.close();
         for(const clients of progressClients.values())for(const client of [...clients])client.close();
         desktopHub.close();

@@ -67,6 +67,21 @@ test("push HTTP routes enforce authentication, CSRF, ownership, and DELETE body 
   assert.equal(f.db.prepare("SELECT count(*) n FROM push_subscriptions").get().n, 0);
 });
 
+test("successful push test returns accepted after exactly one transport send", async t => {
+  const f = await fixture(t);
+  const user = await f.register("push_test_success");
+  const sub = subscription("test-success");
+  assert.equal((await f.subscribe(user, sub)).status, 201);
+
+  const result = await f.call("/api/push/test", { method: "POST", auth: user, body: { endpoint: sub.endpoint } });
+
+  assert.equal(result.status, 202);
+  assert.equal(result.data.accepted, true);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].endpoint, sub.endpoint);
+  assert.equal(f.sent[0].payload.tag, "push-test");
+});
+
 test("room pushes exclude sender and outsiders, protect content, and stop after membership/session loss", async t => {
   const f = await fixture(t);
   const owner = await f.register("push_room_owner");

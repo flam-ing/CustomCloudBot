@@ -37,6 +37,8 @@ test("push safely handles missing/malformed data and confines notification desti
   }
   await dispatch(w.events.get("push"), { data: { json() { throw new Error("invalid JSON"); } } });
   assert.equal(w.notifications.length, 5);
+  await dispatch(w.events.get("push"), { data: { json: () => ({tag:"room-123", body:"New reply"}) } });
+  assert.equal(w.notifications.at(-1).options.renotify, true, "a new reply should alert even when it replaces the same room notification");
 });
 
 test("notification click opens the room, stripping arbitrary paths and query parameters", async () => {
