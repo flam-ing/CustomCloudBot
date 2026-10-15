@@ -108,7 +108,7 @@
 }
 .message-meta time {
   flex-shrink: 0;
-  color: var(--dim);
+  color: var(--muted);
   font-size: var(--fs-xs, 12px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -121,7 +121,7 @@
   border-radius: var(--radius-pill, 999px);
   background: rgba(121, 86, 181, .12);
   color: var(--accent-strong, #654296);
-  font-size: 10.5px;
+  font-size: var(--fs-xs, 12px);
   font-weight: var(--fw-semibold, 600);
   line-height: 16px;
   letter-spacing: .02em;
@@ -137,8 +137,11 @@
   white-space: nowrap;
 }
 .message.is-grouped > .avatar { display: none; }
-/* People write in bubbles. */
+/* People write in bubbles that hug their words, even when a picture below is wider.
+   Korean breaks between words; only a word too long for the line is split. */
 .message-body > p {
+  width: fit-content;
+  max-width: 100%;
   margin: 0;
   padding: 9px 14px;
   border-radius: 18px;
@@ -147,15 +150,16 @@
   font-size: var(--fs-body, 15px);
   line-height: 1.55;
   white-space: pre-wrap;
+  word-break: keep-all;
   overflow-wrap: anywhere;
 }
-.message-own .message-body > p { background: var(--own-bubble); }
+.message-own .message-body > p { margin-left: auto; background: var(--own-bubble); }
 .message.is-grouped:not(.message-own) .message-body > p { border-top-left-radius: 6px; }
 .message:not(.message-own):has(+ .message.is-grouped) .message-body > p { border-bottom-left-radius: 6px; }
 .message-own.is-grouped .message-body > p { border-top-right-radius: 6px; }
 .message-own:has(+ .message-own.is-grouped) .message-body > p { border-bottom-right-radius: 6px; }
 
-/* Long notes fold after ten lines. */
+/* Long notes (over 15 lines or 600 characters) fold to their first ten lines. */
 .message-clip { display: block; }
 .message-text.is-collapsible:not(.is-expanded) .message-clip {
   max-height: calc(1.55em * 10);
@@ -201,6 +205,7 @@
   font-size: var(--fs-sm, 13px);
   line-height: 1.45;
   text-align: right;
+  word-break: keep-all;
 }
 .message-send-error > span { min-width: 0; padding-right: 2px; }
 .message-send-error > span::before {
@@ -244,6 +249,7 @@
   color: var(--text);
   font-size: var(--fs-body, 15px);
   line-height: 1.7;
+  word-break: keep-all;
   overflow-wrap: anywhere;
 }
 .message-copy > * { margin: 0; }
@@ -264,6 +270,8 @@
 .message-copy h6 { color: var(--muted); font-size: var(--fs-md, 14px); }
 .message-copy strong { font-weight: var(--fw-semibold, 600); }
 .message-copy :is(ul, ol) { margin: 0; padding-left: 1.45em; }
+/* Room for two-digit numbers, so "10." never hangs past the text edge. */
+.message-copy ol { padding-left: 2em; }
 .message-copy li + li { margin-top: .3em; }
 .message-copy li > :is(ul, ol, blockquote, .rich-paragraph, .code-block, .rich-table) { margin-top: .35em; }
 .message-copy li > :first-child { margin-top: 0; }
@@ -389,6 +397,8 @@
   cursor: default;
 }
 .message-image.is-broken img { display: none; }
+/* Two columns of up to 160px. The tracks keep that width even when the caption is short,
+   and shrink only when the message itself is narrower. */
 .message-attachments.is-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 160px)); }
 .message-own .message-attachments.is-grid { justify-content: end; }
 .message-attachments.is-grid .message-image { width: auto; aspect-ratio: 1; }
@@ -496,8 +506,8 @@
 .message-actions-time {
   display: none;
   padding: 0 6px 0 8px;
-  color: var(--dim);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--fs-xs, 12px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -517,11 +527,6 @@
 .message-body > .message-actions button:hover,
 .message-body > .message-actions button:focus-visible { background: rgba(167, 136, 205, .16); color: var(--accent-strong, #654296); }
 .message-body > .message-actions .icon { width: 16px; height: 16px; }
-@media (hover: none) {
-  .message:hover .message-body > .message-actions { opacity: 0; pointer-events: none; }
-  .message.is-active .message-body > .message-actions,
-  .message:focus-within .message-body > .message-actions { opacity: 1; pointer-events: auto; }
-}
 
 /* "맨 아래로" appears once the reader has scrolled away from the latest message. */
 .transcript-jump-anchor { position: relative; z-index: var(--z-sticky, 10); height: 0; }
@@ -660,7 +665,6 @@
   .message-bot:not(.message-thinking) > .avatar .icon { width: 16px; height: 16px; }
   .message-bot:not(.message-thinking) > .message-meta { align-items: center; min-height: 24px; padding-bottom: 0; }
   .message-bot:not(.message-thinking) > .message-body { margin-top: 6px; }
-  .message-attachments.is-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .message-actions-time, .message.is-grouped .message-actions-time { display: none; }
 }
 @container transcript (min-width: 420px) and (max-width: 560px) {
@@ -685,11 +689,24 @@
   .message-own .message-body > .message-actions { right: 0; left: auto; }
   .message-body > .message-actions button { width: 44px; height: 44px; }
   .message-body > .message-actions .icon { width: 20px; height: 20px; }
-  .message-more::after, .message-send-error button::after { content: ""; position: absolute; inset: -8px -4px; }
+  .message-more::after, .message-send-error button::after { content: ""; position: absolute; inset: -10px -6px; }
+  .message-copy .code-header button { position: relative; }
+  /* The code box clips above the header, so the larger target reaches down into the code. */
+  .message-copy .code-header button::after { content: ""; position: absolute; inset: -3px -4px -13px; }
   .audio-toggle { width: 44px; height: 44px; }
   .audio-seek { height: 44px; }
   .transcript-jump { height: 44px; padding: 0 18px 0 14px; }
   .rich-table td { min-width: 6em; }
+}
+/* Touch screens have no hover. A tapped message opens its tools as a row of their own
+   right below it, so they never cover other words. */
+@media (hover: none) {
+  .message:hover .message-body > .message-actions,
+  .message:focus-within .message-body > .message-actions { opacity: 0; pointer-events: none; }
+  .message.is-active .message-body > .message-actions,
+  .message:has(.message-actions :focus-visible) .message-body > .message-actions { opacity: 1; pointer-events: auto; }
+  .message.is-active .message-body > .message-actions { position: static; width: fit-content; margin-top: 6px; }
+  .message-own.is-active .message-body > .message-actions { margin-left: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
