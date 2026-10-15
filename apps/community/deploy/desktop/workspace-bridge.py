@@ -39,7 +39,13 @@ def browser_on_main_display(pid):
             return False
         with open(f"/proc/{pid}/environ", "rb") as source:
             values = source.read(65536).split(b"\0")
-        return b"DISPLAY=:99" in values or b"DISPLAY=:99.0" in values
+        if b"DISPLAY=:99" in values or b"DISPLAY=:99.0" in values:
+            return True
+        # Chrome clears its initial environment on Linux. Its explicit display
+        # argument remains readable and still restricts us to the browser view.
+        with open(f"/proc/{pid}/cmdline", "rb") as source:
+            arguments = source.read(65536).split(b"\0")
+        return b"--display=:99" in arguments or b"--display=:99.0" in arguments
     except (ValueError, TypeError, OSError):
         return False
 

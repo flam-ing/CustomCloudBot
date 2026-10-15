@@ -17,6 +17,15 @@ bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 
 
+class BrowserProcessTests(unittest.TestCase):
+    def test_chrome_with_scrubbed_environment_uses_explicit_display(self):
+        import io
+        from unittest.mock import patch
+        for display, expected in [(b':99', True), (b':99.0', True), (b':100', False), (b':990', False)]:
+            with patch.object(bridge.os, 'readlink', return_value='/opt/google/chrome/chrome'), patch('builtins.open', side_effect=lambda path, mode: io.BytesIO(b'' if path.endswith('/environ') else b'/opt/google/chrome/chrome\0--display='+display+b'\0')):
+                self.assertEqual(bridge.browser_on_main_display(23), expected)
+
+
 class Accessible:
     def __init__(self, states=(), children=(), bounds=(10, 20, 100, 30), pid=42):
         self.states, self.children, self.bounds, self.pid = set(states), list(children), bounds, pid
@@ -123,6 +132,7 @@ class InputRegionTests(unittest.TestCase):
             self.assertIn("USER desktop", source)
         startup = (root / "entrypoint.sh").read_text()
         self.assertIn('exec dbus-run-session -- "$0" "$@"', startup)
+        self.assertIn('ACCESSIBILITY_ENABLED=1 google-chrome', startup)
         self.assertIn("--force-renderer-accessibility", startup)
         self.assertNotIn("  --no-sandbox", startup)
 

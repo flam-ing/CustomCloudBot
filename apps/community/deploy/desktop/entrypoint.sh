@@ -44,7 +44,7 @@ websockify --web=/usr/share/novnc "$ws_port" "127.0.0.1:$vnc_port" >/run/desktop
 ws_pid=$!
 
 # Do not add --no-sandbox. Chrome's Linux sandbox must remain enabled.
-google-chrome \
+ACCESSIBILITY_ENABLED=1 google-chrome \
   --display="$display" \
   --user-data-dir=/home/desktop/chromium \
   --remote-debugging-address=127.0.0.1 \
