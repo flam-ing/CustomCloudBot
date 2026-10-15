@@ -1,5 +1,5 @@
 import { applyBrand } from "/setup.js";
-import { checkLabel, serviceStatus, sortServices, summarizeServiceResult, summarizeModelCheck } from "/integrations-ui.mjs";
+import { checkLabel, keepFocus, serviceStatus, sortServices, summarizeServiceResult, summarizeModelCheck } from "/integrations-ui.mjs";
 const status = document.querySelector("#status"), services = document.querySelector("#services");
 let csrf;
 const names = new Map();
@@ -46,12 +46,13 @@ try {
     for (const action of service.actions) {
       const button = node("button", "integ-button", checkLabel(action)); button.type = "button"; button.disabled = !service.configured;
       button.onclick = async () => {
+        const hadFocus = document.activeElement === button;
         button.disabled = true; showResult(result, { state: "busy", lines: ["확인하고 있어요…"] });
         try {
           const response = await api(`/api/admin/integrations/${service.id}/${action}`, query ? { query: query.value } : {});
           showResult(result, { state: "ok", lines: ["연결됨 · " + summarizeServiceResult(service.id, action, response.result)], raw: response.result });
         } catch (e) { showResult(result, { state: "error", lines: [e.message] }); }
-        finally { button.disabled = false; }
+        finally { button.disabled = false; keepFocus(button, hadFocus); }
       };
       controls.append(button);
     }
@@ -62,21 +63,21 @@ try {
 } catch (e) { status.textContent = e.message; status.dataset.state = "error"; }
 
 document.querySelector("#models").onclick = async (event) => {
-  const output = document.querySelector("#model-result"), button = event.currentTarget;
+  const output = document.querySelector("#model-result"), button = event.currentTarget, hadFocus = document.activeElement === button;
   button.disabled = true; showResult(output, { state: "busy", lines: ["확인하고 있어요…"] });
   try { const summary = summarizeModelCheck(await api("/api/models")); showResult(output, { state: summary.ok ? "ok" : "error", lines: summary.lines, raw: summary.raw }); }
   catch (e) { showResult(output, { state: "error", lines: [e.message] }); }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; keepFocus(button, hadFocus); }
 };
 
 document.querySelector("#ask-form").onsubmit = async (event) => {
   event.preventDefault();
-  const button = document.querySelector("#ask-button"), output = document.querySelector("#answer");
+  const button = document.querySelector("#ask-button"), output = document.querySelector("#answer"), hadFocus = document.activeElement === button;
   button.disabled = true; output.replaceChildren(node("p", "integ-note", "연결 서비스를 확인하고 있어요…"));
   try {
     const data = await api("/api/admin/integrations/ask", { prompt: document.querySelector("#ask-prompt").value });
     output.replaceChildren(node("p", "integ-answer-text", data.answer));
     if (data.usedServices?.length) output.append(node("p", "integ-note", "조회한 서비스: " + data.usedServices.map((s) => `${names.get(s.id) || s.id} (${checkLabel(s.action)})`).join(", ")));
   } catch (e) { output.replaceChildren(node("p", "integ-error", e.message)); }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; keepFocus(button, hadFocus); }
 };

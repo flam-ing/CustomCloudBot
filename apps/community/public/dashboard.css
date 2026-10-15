@@ -29,6 +29,8 @@
 .is-host-dashboard :is(.members-button, #room-invite-button, .voice-call-button, .desktop-button, .agent-presence) { display: none !important; }
 
 /* ---- Server dashboard */
+/* Korean wraps between words, not between syllables. */
+.host-dashboard, .capability-hub { word-break: keep-all; overflow-wrap: break-word; }
 .host-dashboard { width: 100%; max-width: 960px; margin: 0 auto; padding: 60px 20px 40px; }
 .host-head h2 { margin: 0 0 4px; font-size: var(--fs-2xl, 22px); font-weight: var(--fw-semibold, 600); letter-spacing: -.4px; }
 .host-dashboard .host-subtitle { margin: 0; color: var(--muted, #606679); font-size: var(--fs-md, 14px); }
@@ -84,11 +86,12 @@
 
 /* ---- 통합 관리 dialog */
 .capability-hub.capability-hub { width: min(640px, calc(100vw - 32px)); max-height: min(780px, calc(100dvh - 48px)); padding: 0; border-radius: var(--radius-xl, 22px); overflow: auto; overscroll-behavior: contain; }
-.hub-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 16px 12px 24px; background: #fbfafff2; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.hub-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 16px 12px 24px; background: #fbfaff; border-bottom: 1px solid var(--line, rgba(79, 97, 124, .15)); }
 .hub-head h2 { margin: 0; font-size: var(--fs-xl, 18px); font-weight: var(--fw-semibold, 600); }
 .capability-hub .hub-close { width: 40px; height: 40px; padding: 0; border-radius: var(--radius-md, 12px); background: transparent; color: var(--muted, #606679); }
 .capability-hub .hub-close:hover { background: var(--hover, rgba(126, 96, 180, .08)); color: var(--text, #2e3242); }
 .capability-hub section.hub-section { margin: 0; padding: 16px 24px 18px; border-top: 1px solid var(--line, rgba(79, 97, 124, .15)); }
+.capability-hub .hub-head + section.hub-section { border-top: 0; }
 .hub-section h3 { margin: 0 0 4px; font-size: var(--fs-lg, 16px); font-weight: var(--fw-semibold, 600); }
 .hub-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
 .hub-link { color: var(--accent-strong, #654296); font-size: var(--fs-md, 14px); text-decoration: none; padding: 4px 0; }
@@ -118,7 +121,7 @@
 .hub-foot { margin: 0; padding: 12px 24px 20px; border-top: 1px solid var(--line, rgba(79, 97, 124, .15)); color: var(--muted, #606679); font-size: var(--fs-sm, 13px); }
 @media (pointer: coarse) {
   .capability-hub .hub-check, .capability-hub .hub-reset-button, .capability-hub .hub-close { min-height: var(--tap, 44px); min-width: var(--tap, 44px); }
-  .hub-link { padding: 12px 0; }
+  .hub-link { display: inline-flex; align-items: center; min-height: var(--tap, 44px); padding: 0; }
 }
 @media (max-width: 600px) {
   .capability-hub.capability-hub { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: var(--radius-lg, 16px); }
@@ -126,8 +129,6 @@
   .capability-hub section.hub-section { padding: 14px 16px 16px; }
   .hub-foot { padding: 12px 16px 18px; }
 }
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .hub-head { background: #fbfaff; } }
-@media (prefers-reduced-transparency: reduce) { .hub-head { background: #fbfaff; -webkit-backdrop-filter: none; backdrop-filter: none; } }
 
 /* ---- Sign-in: a long product name wraps to two lines and never pushes the form off screen. */
 .auth-panel { min-width: 0; max-width: 100%; }

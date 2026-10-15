@@ -1,6 +1,6 @@
 /* Connected services page: the same lavender glass look as the app (glass.css
    provides the canvas, colors and focus ring). */
-body { margin: 0; font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif); color: var(--text, #2e3242); font-size: var(--fs-body, 15px); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+body { margin: 0; font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif); color: var(--text, #2e3242); font-size: var(--fs-body, 15px); line-height: 1.6; word-break: keep-all; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
 *, *::before, *::after { box-sizing: border-box; }
 .integ { max-width: 1040px; margin: 0 auto; padding: 28px 24px 64px; }
 .integ-nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 20px; }
@@ -46,7 +46,7 @@ body { margin: 0; font-family: var(--font-sans, -apple-system, BlinkMacSystemFon
 .integ-raw { margin-top: 8px; font-size: var(--fs-sm, 13px); }
 .integ-raw summary { cursor: pointer; color: var(--muted, #606679); padding: 4px 0; width: max-content; }
 .integ-raw pre { margin: 6px 0 0; max-height: 320px; overflow: auto; padding: 10px 12px; border-radius: var(--radius-sm, 8px); background: #f5f1fb; border: 1px solid #ac91ca27; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", "Noto Sans Mono CJK KR", monospace); }
-@media (pointer: coarse) { .integ-button, .integ-input, .integ-ask-form input { min-height: var(--tap, 44px); } .integ-link { padding: 11px 0; } .integ-raw summary { padding: 11px 0; } }
+@media (pointer: coarse) { .integ-button, .integ-input, .integ-ask-form input { min-height: var(--tap, 44px); } .integ-link { padding: 11px 0; } .integ-raw summary { padding: 12px 0; } }
 @media (max-width: 600px) {
   .integ { padding: 20px 16px 48px; }
   .integ-head h1 { font-size: var(--fs-2xl, 22px); }

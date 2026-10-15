@@ -84,6 +84,11 @@ function button(text, className, handler) {
   return element;
 }
 
+/** A button disabled while it works drops focus to <body>; give it back afterwards. */
+export function keepFocus(element, hadFocus) {
+  if (hadFocus && element.isConnected && (!document.activeElement || document.activeElement === document.body || element.closest("dialog") === document.activeElement)) element.focus({ preventScroll: true });
+}
+
 /** Run one read-only check and report it in plain words. */
 export async function runServiceCheck({ api, service, query = "" }) {
   const action = service.actions[0];
@@ -100,7 +105,9 @@ export async function openCapabilityHub({ api, onReset }) {
     dialog.setAttribute("aria-labelledby", "capability-hub-title");
     // Return focus to whatever opened the dialog, or to the visible menu button when that was a menu item.
     dialog.addEventListener("close", () => {
-      const visible = (element) => element?.isConnected && element.checkVisibility?.() !== false;
+      // Esc also closes the phone drawer, which hides only after its slide-out, so skip anything inside a closing drawer.
+      const inClosedDrawer = (element) => !!element.closest(".sidebar:not(.is-open)") && !!globalThis.matchMedia?.("(max-width: 720px)").matches;
+      const visible = (element) => element?.isConnected && element.checkVisibility?.({ visibilityProperty: true }) !== false && !inClosedDrawer(element);
       const target = [dialog.returnTarget, document.querySelector("#profile-customize"), document.querySelector("#mobile-menu")].find(visible);
       dialog.returnTarget = null; target?.focus({ preventScroll: true });
     });
@@ -150,10 +157,11 @@ export async function openCapabilityHub({ api, onReset }) {
       if (service.configured && Array.isArray(service.actions) && service.actions.length) {
         const result = node("p", "hub-result"); result.setAttribute("aria-live", "polite");
         const check = button("연결 확인", "hub-check", async () => {
+          const hadFocus = document.activeElement === check;
           check.disabled = true; check.textContent = "확인 중…"; result.dataset.state = "busy"; result.textContent = "연결을 확인하고 있어요…";
           try { const outcome = await runServiceCheck({ api, service }); result.dataset.state = "ok"; result.textContent = "연결됨 · " + outcome.text; }
           catch (error) { result.dataset.state = "error"; result.textContent = error.message || "연결하지 못했습니다."; }
-          finally { check.disabled = false; check.textContent = "연결 확인"; }
+          finally { check.disabled = false; check.textContent = "연결 확인"; keepFocus(check, hadFocus); }
         });
         check.setAttribute("aria-label", `${service.name} 연결 확인`);
         item.append(check, result);

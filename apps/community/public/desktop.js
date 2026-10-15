@@ -195,8 +195,8 @@ function createWorkspaceWindow({api,roomId,getRoomName,initialView,onViewChange,
   const open=()=>{if(state.destroyed)return;title.textContent=(getRoomName(roomId)||'대화')+' · 작업 공간';panel.setAttribute('aria-label',title.textContent);raise();if(panel.hidden){panel.hidden=false;fit();void activate();buttons.get(state.view)?.focus({preventScroll:true});}};
   const hide=()=>{const hadFocus=panel.contains(document.activeElement);stop();panel.hidden=true;drag=null;dropPanel(panel);content.replaceChildren();if(document.fullscreenElement===panel)document.exitFullscreen?.().catch(()=>{});const target=returnFocus();if(hadFocus&&target?.isConnected&&!target.hidden)target.focus({preventScroll:true});};
   close.onclick=onClose;retry.onclick=()=>void activate();
-  // Esc closes from the window's own controls; the remote screen and terminal keep Esc for themselves.
-  panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&(event.target===head||event.target.closest?.('.desktop-head,.workspace-tabs,.workspace-statusbar'))){event.preventDefault();onClose();}});
+  // Esc closes from the window's own controls and the file list; the remote screen, the address field and the terminal keep Esc for themselves.
+  panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&(event.target===head||event.target.closest?.('.desktop-head,.workspace-tabs,.workspace-statusbar,.workspace-files-toolbar,.workspace-file-list,.workspace-file-preview-head,button.workspace-button'))){event.preventDefault();onClose();}});
   const visibility=()=>{if(document.hidden)stop();else if(!panel.hidden)void activate();};document.addEventListener('visibilitychange',visibility);
   const viewportResize=()=>fit();window.addEventListener('resize',viewportResize);
   return {open,close:hide,destroy(){if(state.destroyed)return;hide();state.destroyed=true;state.paths.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',viewportResize);dropPanel(panel);panel.remove();}};
