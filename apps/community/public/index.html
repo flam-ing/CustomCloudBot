@@ -317,7 +317,7 @@
             <div
               id="message-list"
               class="message-list"
-              aria-live="polite"
+              role="log"
               aria-label="대화 내용"
             ></div>
             <div class="composer-dock">
@@ -456,11 +456,15 @@
         </div>
       </form>
     </dialog>
-    <dialog id="image-dialog" class="image-dialog">
-      <button id="image-dialog-close" class="icon-button" type="button" aria-label="이미지 닫기">
+    <dialog id="image-dialog" class="image-dialog" aria-label="사진 보기">
+      <button id="image-dialog-close" class="icon-button" type="button" aria-label="사진 닫기">
         <svg class="icon"><use href="#i-close" /></svg>
       </button>
-      <img id="image-dialog-image" alt="첨부 이미지" />
+      <figure class="image-viewer">
+        <p id="image-dialog-status" class="image-viewer-status" role="status"></p>
+        <img id="image-dialog-image" alt="" />
+        <figcaption id="image-dialog-caption"></figcaption>
+      </figure>
     </dialog>
     <dialog id="join-dialog" class="modal">
       <form id="join-form">
