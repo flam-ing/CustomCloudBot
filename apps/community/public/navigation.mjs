@@ -99,7 +99,7 @@ export function createMenu({ className = "nav-menu", sheetQuery = "(max-width: 7
   if (popover) menu.popover = "manual";
   document.body.append(menu);
   const sheet = matchMedia(sheetQuery);
-  let trigger = null, onClose = null;
+  let trigger = null, onClose = null, anchorElement = null;
 
   function close({ restoreFocus = true } = {}) {
     if (menu.hidden) return;
@@ -107,7 +107,7 @@ export function createMenu({ className = "nav-menu", sheetQuery = "(max-width: 7
     menu.hidden = true;
     menu.classList.remove("is-sheet");
     const back = trigger, done = onClose;
-    trigger = null; onClose = null;
+    trigger = null; onClose = null; anchorElement = null;
     if (back?.hasAttribute("aria-haspopup")) back.setAttribute("aria-expanded", "false");
     if (restoreFocus && back?.isConnected) back.focus({ preventScroll: true });
     done?.();
@@ -150,6 +150,7 @@ export function createMenu({ className = "nav-menu", sheetQuery = "(max-width: 7
     }
     trigger = from;
     onClose = closed;
+    anchorElement = anchor instanceof Element ? anchor : from;
     menu.hidden = false;
     if (popover) menu.showPopover();
     if (asSheet) {
@@ -187,8 +188,12 @@ export function createMenu({ className = "nav-menu", sheetQuery = "(max-width: 7
     if (!inside) close({ restoreFocus: false });
   }, true);
   addEventListener("resize", () => close({ restoreFocus: false }));
+  // Only a scroll that moves the menu's anchor closes it. A transcript that
+  // scrolls by itself when a new message arrives leaves the menu open.
   document.addEventListener("scroll", (event) => {
-    if (!menu.hidden && !menu.classList.contains("is-sheet") && !menu.contains(event.target)) close({ restoreFocus: false });
+    if (menu.hidden || menu.classList.contains("is-sheet") || menu.contains(event.target)) return;
+    const moved = anchorElement ? event.target.contains?.(anchorElement) : event.target === document;
+    if (moved) close({ restoreFocus: false });
   }, true);
 
   return { element: menu, open, close, isOpen: () => !menu.hidden, trigger: () => trigger };

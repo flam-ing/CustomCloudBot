@@ -310,7 +310,9 @@
 @media (pointer: coarse) {
   .sidebar-new { height: var(--tap, 44px); }
   .sidebar-tool { width: var(--tap, 44px); height: var(--tap, 44px); }
-  #room-search-close { width: 40px; height: 40px; }
+  .sidebar-search, .member-search { height: calc(var(--tap, 44px) + 2px); }
+  .sidebar-search { padding-right: 0; }
+  #room-search-close { width: var(--tap, 44px); height: var(--tap, 44px); }
   .branch-heading #branch-fork, .branch-heading #branch-merge { height: var(--tap, 44px); padding: 0 12px; }
   .branch-more { width: var(--tap, 44px); height: var(--tap, 44px); right: 2px; opacity: 1; }
   .branch-row { padding-right: 50px; }

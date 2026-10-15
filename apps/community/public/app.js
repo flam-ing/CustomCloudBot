@@ -655,7 +655,7 @@ function renderRooms() {
       item.append(button, more); graphList.append(item);
     }
     graphList.prepend(svg); els.roomList.append(graphList);
-    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=roomQuery.trim()?`‘${roomQuery.trim()}’와 맞는 대화가 없어요.`:"아직 대화가 없어요.";els.roomList.append(empty); }
+    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=roomQuery.trim()?`‘${roomQuery.trim()}’ 검색 결과가 없어요.`:"아직 대화가 없어요. 위의 ‘새 대화’로 시작해 보세요.";els.roomList.append(empty); }
   }
   syncSessionColors(colors);
   if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
@@ -685,6 +685,7 @@ function showEmpty() {
   stopPolling();
   els.empty.classList.remove("is-hidden");
   els.roomView.classList.add("is-hidden");
+  nav.closeMembers({ restoreFocus: false });
   $("#room-invite-button").classList.add("is-hidden");
   els.mobileRoomTitle.textContent = "대화를 선택하세요";
   renderRooms();
@@ -717,6 +718,8 @@ async function selectRoom(id) {
   els.messages.replaceChildren();
   els.messages.setAttribute("aria-busy", "true");
   renderMemberList(id === MONITOR_ROOM ? [] : null);
+  // The dashboard has no participants; keep the conversation info closed there.
+  if (id === MONITOR_ROOM) nav.closeMembers({ restoreFocus: false });
   renderRooms();
   els.empty.classList.add("is-hidden");
   els.roomView.classList.remove("is-hidden");
@@ -889,7 +892,7 @@ function renderMemberList(members) {
     const role = document.createElement("small"); role.textContent = memberRoleLabel(member.role) + (member.id === self ? " · 나" : "");
     copy.append(name, role); row.append(avatar, copy); list.append(row);
   }
-  if (!shown.length) { const empty = document.createElement("p"); empty.className = "member-empty"; empty.textContent = memberQuery ? `‘${memberQuery.trim()}’와 맞는 사람이 없어요.` : "아직 참여자가 없어요."; list.append(empty); }
+  if (!shown.length) { const empty = document.createElement("p"); empty.className = "member-empty"; empty.textContent = memberQuery.trim() ? `‘${memberQuery.trim()}’ 검색 결과가 없어요.` : "아직 참여자가 없어요."; list.append(empty); }
 }
 function renderRoom(data) {
   if(data.room) {const room=state.rooms.find(r=>r.id===data.room.id);if(room&&room.name!==data.room.name){room.name=data.room.name;els.roomTitle.textContent=room.name;renderRooms();}}
@@ -2717,11 +2720,13 @@ function setupDock() {
     const fine=matchMedia("(hover:hover) and (pointer:fine)").matches;
     const then=run=>()=>{if(nav.drawerOpen())closeSidebar();run();};
     const items=[];
-    if(id&&state.selectedRoom&&!opened.has(id)){
+    // A phone is too narrow for two conversations side by side, so it offers no split.
+    const phone=matchMedia("(max-width: 720px)").matches;
+    if(id&&state.selectedRoom&&!opened.has(id)&&!phone){
       items.push({label:"오른쪽에 나란히 열기",run:then(()=>{pendingDock={roomId:id};placeDock(Math.min(state.focusPane,dockRects.length-1),"right");})});
       if(fine)items.push({label:"놓을 곳 골라 나란히 열기",run:then(()=>begin(id))});
     }
-    if(dockRects.length>1)items.push({label:"나란히 보기 닫기",run:()=>{state.layout=2;setLayout(2);dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();hide();}});
+    if(dockRects.length>1)items.push({label:"나란히 보기 닫기",run:then(()=>{state.layout=2;setLayout(2);dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();hide();})});
     if(targetRoom) {
       if(targetRoom.id!==MONITOR_ROOM&&!targetRoom.archived){
         items.push({label:"여기서 Fork",run:then(()=>void sessionAction("fork",null,null,null,null,targetRoom.id))});
