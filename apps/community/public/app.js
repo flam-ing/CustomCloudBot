@@ -18,6 +18,7 @@ import { createVoiceCall } from "/voice-call.js";
 import { createMessageQueue } from "/message-queue.js";
 import { pasteComposerImages, uploadAttachmentFiles, clearAttachmentDraft, removeAttachmentDraft } from "/composer-attachments.mjs";
 import { suggestTopicSwitch } from "/topic-switch.mjs";
+import { EFFORTS, effortLabel, modelChipLabel, botChipLabel, formatDuration, toastDuration, sendsOnEnter, placePopover, RECORDING_LIMIT_MS, RECORDING_WARN_MS, ATTACHMENT_LIMIT, topicParticle } from "/composer-ui.mjs";
 const inviteLinks = createInviteLinks();
 
 let dockRects = [{x:0,y:0,w:1,h:1}];
@@ -133,15 +134,132 @@ const showMessage = (target, message, type = "error") => {
   target.textContent = message || "";
   target.className = `form-message ${type}`;
 };
+// Notices sit at the top center in the top layer, above open dialogs, and clear
+// themselves. Re-showing moves the toast above any dialog opened after it.
 const toast = (message) => {
-  els.toast.textContent = message;
-  els.toast.classList.add("is-visible");
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(
-    () => els.toast.classList.remove("is-visible"),
-    2800,
-  );
+  const element = els.toast, text = String(message ?? "").trim();
+  if (!element || !text) return;
+  clearTimeout(toast.timer); clearTimeout(toast.clearTimer);
+  element.textContent = text;
+  if (typeof element.showPopover === "function") {
+    try { if (element.matches(":popover-open")) element.hidePopover(); element.showPopover(); } catch {}
+  }
+  requestAnimationFrame(() => element.classList.add("is-visible"));
+  toast.timer = setTimeout(hideToast, toastDuration(text));
 };
+function hideToast() {
+  const element = els.toast;
+  clearTimeout(toast.timer);
+  element.classList.remove("is-visible");
+  toast.clearTimer = setTimeout(() => {
+    try { if (element.matches(":popover-open")) element.hidePopover(); } catch {}
+    element.textContent = "";
+  }, 220);
+}
+// One confirmation dialog for every risky action: a title, one plain sentence,
+// [취소] first and focused, then the action in its own color.
+function confirmDialog({ title, body, confirmLabel, cancelLabel = "취소", danger = true, returnFocus = document.activeElement }) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog"), id = `confirm-${Date.now().toString(36)}`;
+    dialog.className = "confirm-dialog";
+    dialog.setAttribute("aria-labelledby", `${id}-title`);
+    dialog.setAttribute("aria-describedby", `${id}-body`);
+    const heading = document.createElement("h2"), text = document.createElement("p"), actions = document.createElement("div");
+    heading.id = `${id}-title`; heading.textContent = title;
+    text.id = `${id}-body`; text.textContent = body;
+    actions.className = "confirm-dialog-actions";
+    const cancel = document.createElement("button"), confirm = document.createElement("button");
+    cancel.type = confirm.type = "button";
+    cancel.className = "btn btn-secondary confirm-dialog-cancel"; cancel.textContent = cancelLabel;
+    confirm.className = `btn ${danger ? "btn-danger" : "btn-primary"} confirm-dialog-confirm`; confirm.textContent = confirmLabel;
+    let result = false;
+    cancel.onclick = () => dialog.close();
+    confirm.onclick = () => { result = true; dialog.close(); };
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      if (returnFocus?.isConnected && !returnFocus.closest("[hidden], .is-hidden")) returnFocus.focus({ preventScroll: true });
+      resolve(result);
+    }, { once: true });
+    actions.append(cancel, confirm); dialog.append(heading, text, actions);
+    document.body.append(dialog); dialog.showModal(); cancel.focus();
+  });
+}
+// Composer popups (bot picker, more menu, model menu) open in the top layer next
+// to their button, so the composer's glass and split panes never clip them.
+const nativePopover = typeof HTMLElement.prototype.showPopover === "function";
+function visibleViewport() {
+  const view = window.visualViewport;
+  return { left: view?.offsetLeft || 0, top: view?.offsetTop || 0, width: view?.width || innerWidth, height: view?.height || innerHeight };
+}
+const touchQuery = matchMedia("(hover: none) and (pointer: coarse)");
+function touchComposer() { return touchQuery.matches; }
+let composerPopover = null;
+function prepareComposerPopover(pop) {
+  if (!nativePopover || pop.hasAttribute("popover")) return;
+  pop.setAttribute("popover", "auto");
+  pop.classList.remove("is-hidden");
+}
+function openComposerPopover(pop, trigger, { align = "start", width = 0, temporary = false, focus = null } = {}) {
+  if (trigger._popoverWasOpen) { trigger._popoverWasOpen = false; closeComposerPopover(false); return false; }
+  if (composerPopover?.pop === pop) { closeComposerPopover(true); return false; }
+  closeComposerPopover(false); closeContextPopover();
+  if (temporary) document.body.append(pop);
+  else if (!nativePopover && pop.parentElement !== document.body) document.body.append(pop);
+  prepareComposerPopover(pop);
+  const open = { pop, trigger, temporary, restore: false };
+  open.place = () => {
+    if (!trigger.isConnected || !trigger.getClientRects().length) { closeComposerPopover(false); return; }
+    pop.style.maxHeight = "";
+    if (width) pop.style.width = `${width}px`;
+    const spot = placePopover(trigger.getBoundingClientRect(), { width: width || pop.offsetWidth, height: pop.scrollHeight }, visibleViewport(), { align });
+    Object.assign(pop.style, { left: `${spot.left}px`, top: `${spot.top}px`, maxHeight: `${spot.maxHeight}px` });
+    if (width) pop.style.width = `${spot.width}px`;
+  };
+  open.keys = (event) => {
+    if (event.key === "Escape") { open.restore = true; if (!nativePopover) { event.preventDefault(); closeComposerPopover(true); } return; }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || event.target.matches("input[type=radio]")) return;
+    const items = $$("button:not(:disabled)", pop).filter((item) => item.getClientRects().length);
+    if (!items.length) return;
+    const index = items.indexOf(document.activeElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    event.preventDefault(); items[next].focus();
+  };
+  open.toggle = (event) => {
+    if (event.newState !== "closed" || composerPopover !== open) return;
+    const active = document.activeElement;
+    closeComposerPopover(open.restore || !active || active === document.body || pop.contains(active));
+  };
+  composerPopover = open;
+  pop.addEventListener("keydown", open.keys);
+  if (nativePopover) { pop.addEventListener("toggle", open.toggle); pop.showPopover(); }
+  else pop.classList.remove("is-hidden");
+  pop.classList.add("is-open");
+  trigger.setAttribute("aria-expanded", "true");
+  open.place();
+  addEventListener("resize", open.place); addEventListener("scroll", open.place, true); window.visualViewport?.addEventListener("resize", open.place);
+  (focus || $("button:not(:disabled), input:not(:disabled)", pop))?.focus({ preventScroll: true });
+  return true;
+}
+function closeComposerPopover(restoreFocus = false) {
+  const open = composerPopover;
+  if (!open) return;
+  composerPopover = null;
+  removeEventListener("resize", open.place); removeEventListener("scroll", open.place, true); window.visualViewport?.removeEventListener("resize", open.place);
+  open.pop.removeEventListener("keydown", open.keys); open.pop.removeEventListener("toggle", open.toggle);
+  open.pop.classList.remove("is-open");
+  open.trigger.setAttribute("aria-expanded", "false");
+  try { if (nativePopover && open.pop.matches(":popover-open")) open.pop.hidePopover(); } catch {}
+  if (!nativePopover) open.pop.classList.add("is-hidden");
+  if (open.temporary) open.pop.remove();
+  if (restoreFocus && open.trigger.isConnected) open.trigger.focus({ preventScroll: true });
+}
+// A press on the button of an open popup closes it through light dismiss first;
+// remember that so the following click does not open it again.
+function popoverTrigger(trigger) {
+  trigger.addEventListener("pointerdown", () => { trigger._popoverWasOpen = composerPopover?.trigger === trigger; });
+  return trigger;
+}
 const initials = (name) => (name || "?").trim().slice(0, 1).toUpperCase();
 function renderUserAvatar(avatar, user, name) {
   const label=user.avatarLabel || initials(name || user.displayName || user.username);
@@ -325,9 +443,10 @@ async function enterWorkspace() {
   try {
     const catalog = await api("/api/models");
     if(state.session?.user?.id!==user.id||sidebarEpoch!==workspaceEpoch)return;
+    // Shown once inside the model menu, not as a toast on every login.
+    state.modelNotice = catalog.models.length ? "" : !state.session.model?.configured ? "AI 연결을 설정하면 모델을 고를 수 있어요." : catalog.failures?.length ? "모델 목록을 가져오지 못해 기본 모델로 연결돼요." : "고를 수 있는 모델이 없어 기본 모델로 연결돼요.";
     applyModels(catalog.models);
-    if (!catalog.models.length) toast(!state.session.model?.configured ? "AI 연결을 설정해 주세요." : catalog.failures.length ? "모델 목록을 가져오지 못했습니다. 기본 모델로 연결됩니다." : "선택 가능한 API 모델이 없습니다. 기본 모델로 연결됩니다.");
-  } catch (error) { toast(error.message || "모델 목록을 불러오지 못했습니다."); }
+  } catch (error) { state.modelNotice = "모델 목록을 불러오지 못했어요. 잠시 뒤 다시 열어 보세요."; applyModels(); }
 }
 function renderModelConnection() {
   const model = state.session?.model || {};
@@ -582,9 +701,10 @@ function paintSession(element, color) {
   else { element.style.removeProperty("--pane-tint"); element.style.removeProperty("--session-color"); }
 }
 function syncSessionColors(colors = sessionColors(state.rooms, state.forks)) {
-  const notices = $("#notification-center");
-  const noticeHost = !state.selectedRoom || state.selectedRoom === MONITOR_ROOM ? $(".profile-row") : $(".topbar-actions");
+  const notices = $("#notification-center"), actions = $(".topbar-actions");
+  const noticeHost = !state.selectedRoom || state.selectedRoom === MONITOR_ROOM ? $(".profile-row") : actions?.closest("#composer-more-menu") ? $("#composer-more") : actions;
   if (notices && noticeHost && notices.parentElement !== noticeHost) noticeHost.append(notices);
+  syncNoticeProxy();
   dockPanels().forEach((panel, index) => paintSession(panel, colors.get(dockRoomAt(index))));
   paintSession($("#branch-current"), colors.get(currentBranchId()));
 }
@@ -1115,6 +1235,10 @@ function createMessage(message, pane = null, roomId = state.selectedRoom) {
 function renderBotPicker() {
   const picker = $("#bot-picker");
   picker.replaceChildren();
+  const heading = document.createElement("h3");
+  heading.className = "composer-popover-heading";
+  heading.textContent = state.bots.length ? "답할 봇 · 최대 3개" : "답할 봇";
+  picker.append(heading);
   if (!state.bots.length) {
     const note = document.createElement("span");
     note.className = "picker-note";
@@ -1155,6 +1279,11 @@ function renderBotPicker() {
 function updateBotLabel() {
   $("#bot-picker-label").textContent = "";
   $("#bot-picker-label").hidden = true;
+  const label = botChipLabel(state.selectedBots, state.bots), button = $("#bot-picker-button");
+  $("#bot-chip-label").textContent = label;
+  button.classList.toggle("is-off", !state.selectedBots.length);
+  button.setAttribute("aria-label", `응답할 봇: ${label}. 바꾸기`);
+  button.title = state.selectedBots.length ? `응답할 봇: ${label}` : "응답할 봇이 없어요 · 사람끼리 대화";
 }
 
 function clearPendingAttachments(pane = null) {
@@ -1166,40 +1295,75 @@ function cancelActiveRecording() {
   state.recordingCancelled = true;
   try { state.recording.stop(); } catch {}
 }
+function composerSvg(paths, filled = false) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "icon"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
+  if (filled) svg.classList.add("icon-filled");
+  for (const d of paths) { const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", d); svg.append(path); }
+  return svg;
+}
+const PLAY_PATHS = ["M8 5.5v13l10.5-6.5Z"], PAUSE_PATHS = ["M7.5 5.5h3v13h-3ZM13.5 5.5h3v13h-3Z"];
+// Cards show what is attached: a thumbnail or a play button, the file name, and
+// one short line of state. The full reason stays in the tooltip and for readers.
 function renderPendingAttachments(pane = null) {
   const owner = pane || state;
   const section = pane ? $$(".extra-pane")[state.extra.indexOf(pane)] : null;
   const list = pane ? section && $(".attachment-list", section) : $("#attachment-list");
   if (!list) return;
+  list.querySelectorAll("audio").forEach((audio) => audio.pause());
   list.replaceChildren();
   (owner.pendingAttachments || []).forEach((item) => {
     const card = document.createElement("div");
-    card.className = `attachment-card${item.error ? " is-error" : ""}`;
+    card.className = `attachment-card attachment-${item.kind || "file"}${item.error ? " is-error" : ""}${item.uploading ? " is-uploading" : ""}`;
+    card.title = item.error ? `${item.name}: ${item.error}` : item.name;
+    const status = document.createElement("small");
+    status.className = "attachment-status";
     if (item.kind === "image" && item.previewUrl) {
       const image = document.createElement("img");
       image.src = item.previewUrl;
-      image.alt = item.name;
+      image.alt = "";
       card.append(image);
     } else if (item.kind === "audio" && item.previewUrl && !item.error) {
-      const audio = document.createElement("audio");
-      audio.controls = true;
-      audio.src = item.previewUrl;
-      card.append(audio);
+      const audio = document.createElement("audio"), play = document.createElement("button");
+      audio.src = item.previewUrl; audio.preload = "metadata";
+      play.type = "button"; play.className = "attachment-play";
+      const paint = () => {
+        const playing = !audio.paused && !audio.ended;
+        play.replaceChildren(composerSvg(playing ? PAUSE_PATHS : PLAY_PATHS, true));
+        play.setAttribute("aria-label", `${item.name} ${playing ? "일시 정지" : "미리 듣기"}`);
+        play.setAttribute("aria-pressed", String(playing));
+      };
+      play.onclick = () => { if (audio.paused || audio.ended) { list.querySelectorAll("audio").forEach((other) => other !== audio && other.pause()); void audio.play().catch(() => toast("이 음성은 미리 들을 수 없어요.")); } else audio.pause(); };
+      audio.addEventListener("play", paint); audio.addEventListener("pause", paint); audio.addEventListener("ended", paint);
+      audio.addEventListener("loadedmetadata", () => { if (Number.isFinite(audio.duration) && !item.uploading) status.textContent = `음성 · ${formatDuration(audio.duration * 1000)}`; });
+      paint(); card.append(play, audio);
+    } else {
+      const mark = document.createElement("span");
+      mark.className = "attachment-mark";
+      mark.append(item.error ? composerSvg(["M12 8v5M12 16.5v.5", "M10.3 4.2 3 17a2 2 0 0 0 1.7 3h14.6A2 2 0 0 0 21 17L13.7 4.2a2 2 0 0 0-3.4 0Z"]) : icon(item.kind === "audio" ? "mic" : "attach"));
+      card.append(mark);
     }
+    const copy = document.createElement("span");
+    copy.className = "attachment-copy";
     const name = document.createElement("span");
     name.className = "attachment-name";
-    name.textContent = item.error || (item.uploading ? `${item.name} · 업로드 중…` : item.name);
-    card.append(name);
+    name.textContent = item.name;
+    status.textContent = item.error ? "올리지 못했어요" : item.uploading ? "올리는 중…" : item.kind === "audio" ? "음성" : "사진";
+    copy.append(name, status);
+    if (item.error) { const reason = document.createElement("span"); reason.className = "sr-only"; reason.textContent = `: ${item.error}`; status.append(reason); }
+    card.append(copy);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "attachment-remove";
-    remove.setAttribute("aria-label", `${item.name} 첨부 제거`);
+    remove.setAttribute("aria-label", `${item.name} 첨부 지우기`);
+    remove.title = "지우기";
     remove.disabled = !!owner.sending;
     remove.append(icon("close"));
     remove.addEventListener("click", () => {
       if (owner.sending) return;
       removeAttachmentDraft(owner, item);
       renderPendingAttachments(pane);
+      (pane ? section && $("textarea", section) : $("#message-input"))?.focus({ preventScroll: true });
     });
     card.append(remove);
     list.append(card);
@@ -1226,14 +1390,41 @@ async function uploadAttachments(files, pane = null) {
 function pasteAttachments(event, pane = null) {
   pasteComposerImages(event, { enabled: !composerBlocked(pane), upload: files => uploadAttachments(files, pane) });
 }
+// While recording, the text field becomes one bar: "● 녹음 중 0:12 / 2:00 [취소][첨부]".
+const recordingClock = { started: 0, timer: 0, hadFocus: false };
+function setRecordingUI(mode) {
+  const form = $("#composer-form"), bar = $("#recording-bar"), button = $("#record-button");
+  const focusInside = recordingClock.hadFocus || bar.contains(document.activeElement) || document.activeElement === button;
+  recordingClock.hadFocus = mode === "saving" && focusInside;
+  form.classList.toggle("is-recording", mode !== "idle");
+  bar.hidden = mode === "idle";
+  bar.classList.toggle("is-saving", mode === "saving");
+  $(".recording-title", bar).textContent = mode === "saving" ? "저장하는 중" : "녹음 중";
+  $("#record-done-button").disabled = $("#record-cancel-button").disabled = mode !== "recording";
+  button.classList.toggle("is-recording", mode !== "idle");
+  button.setAttribute("aria-label", mode === "idle" ? "음성 녹음 시작" : "녹음 끝내고 첨부");
+  button.title = mode === "idle" ? "음성 녹음" : "녹음 끝내고 첨부";
+  clearInterval(recordingClock.timer);
+  const tick = () => {
+    const elapsed = Date.now() - recordingClock.started;
+    $("#recording-time").textContent = formatDuration(Math.min(elapsed, RECORDING_LIMIT_MS));
+    bar.classList.toggle("is-near-limit", elapsed >= RECORDING_WARN_MS);
+  };
+  if (mode === "recording") { recordingClock.started = Date.now(); tick(); recordingClock.timer = setInterval(tick, 250); $("#record-done-button").focus({ preventScroll: true }); }
+  if (mode === "idle") { $("#recording-time").textContent = "0:00"; bar.classList.remove("is-near-limit", "is-saving"); if (focusInside) $("#message-input").focus({ preventScroll: true }); }
+  updateModelAvailability();
+}
 async function toggleRecording() {
   if (voiceUI?.roomId) { toast("통화가 끝난 뒤 녹음을 첨부할 수 있어요."); return; }
   const button = $("#record-button");
   if (state.recordingPending) return;
   if (state.recording) {
     state.recording.stop();
-    button.disabled = true;
-    button.textContent = "처리 중…";
+    setRecordingUI("saving");
+    return;
+  }
+  if ((state.pendingAttachments || []).length >= ATTACHMENT_LIMIT) {
+    toast(`첨부는 메시지 하나에 ${ATTACHMENT_LIMIT}개까지예요. 하나를 지운 뒤 녹음해 주세요.`);
     return;
   }
   if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
@@ -1244,15 +1435,17 @@ async function toggleRecording() {
   const attachmentGeneration = state.attachmentGeneration;
   state.recordingPending = true;
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (error) {
     state.recordingPending = false;
-    button.disabled = false;
+    button.disabled = false; button.removeAttribute("aria-busy");
     toast(error?.name === "NotAllowedError" ? "마이크 권한이 필요합니다." : "마이크를 사용할 수 없습니다.");
     return;
   }
+  button.removeAttribute("aria-busy");
   if (roomId !== state.selectedRoom || attachmentGeneration !== state.attachmentGeneration) {
     stream.getTracks().forEach((track) => track.stop());
     state.recordingPending = false;
@@ -1274,10 +1467,6 @@ async function toggleRecording() {
   state.recording = recorder;
   state.recordingPending = false;
   state.recordingCancelled = false;
-  button.classList.add("is-recording");
-  $("#record-cancel-button").hidden = false;
-  button.setAttribute("aria-label", "음성 녹음 중지");
-  button.title = "녹음 중지";
   recorder.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
   recorder.addEventListener("dataavailable", (event) => {
     recordedBytes += event.data.size;
@@ -1303,27 +1492,23 @@ async function toggleRecording() {
     state.recording = null;
     const cancelled = state.recordingCancelled;
     state.recordingCancelled = false;
-    $("#record-cancel-button").hidden = true;
     button.disabled = false;
-    button.classList.remove("is-recording");
-    button.textContent = "";
-    button.append(icon("mic"));
-    button.setAttribute("aria-label", "음성 녹음 시작");
-    button.title = "음성 녹음";
+    setRecordingUI("idle");
     if (cancelled || tooLarge || !chunks.length) return;
     if (roomId !== state.selectedRoom || attachmentGeneration !== state.attachmentGeneration) return;
     const extension = recorder.mimeType.includes("mp4") ? "mp4" : recorder.mimeType.includes("ogg") ? "ogg" : "webm";
-    await uploadAttachments([new File([new Blob(chunks, { type: recorder.mimeType })], `voice-${Date.now()}.${extension}`, { type: recorder.mimeType })]);
+    await uploadAttachments([new File([new Blob(chunks, { type: recorder.mimeType })], `음성 메모 ${new Date().getHours()}시 ${String(new Date().getMinutes()).padStart(2, "0")}분.${extension}`, { type: recorder.mimeType })]);
   });
   recorder.start(1000);
   button.disabled = false;
+  setRecordingUI("recording");
   recorder.timeout = setTimeout(() => {
     if (recorder.state === "recording") {
       recorder.stop();
-      toast("녹음은 최대 120초까지 가능합니다.");
+      setRecordingUI("saving");
+      toast("녹음은 2분까지라 여기까지 첨부했어요.");
     }
-  }, 120000);
-  toast("녹음 중… 다시 눌러 녹음을 첨부합니다.");
+  }, RECORDING_LIMIT_MS);
 }
 function topicChoiceDialog() {
   return new Promise(resolve=>{
@@ -1487,6 +1672,8 @@ async function startNewSession() {
 async function resetConversations(button, dialog = null) {
   const userId=state.session?.user?.id,epoch=sidebarEpoch;if(!userId||button.disabled)return;
   if(state.rooms.some(room=>branchBusy(room.id))){toast("진행 중인 작업이 끝난 뒤 목록을 비워 주세요.");return;}
+  if(!await confirmDialog({title:"대화 목록을 비울까요?",body:"지금 있는 가지를 모두 보관하고 새 줄기를 시작해요. 보관한 대화는 계정 메뉴의 ‘대화 복원’에서 다시 꺼낼 수 있어요.",confirmLabel:"모두 보관",returnFocus:button}))return;
+  if(state.session?.user?.id!==userId||sidebarEpoch!==epoch||!button.isConnected)return;
   setBusy(button,true,"비우는 중…");
   try {
     const data=await api("/api/sessions/reset",{method:"POST",body:"{}"});
@@ -1506,7 +1693,7 @@ async function openCapabilityHub() {
   const close=document.createElement("button");close.textContent="닫기";close.onclick=()=>dialog.close();dialog.append(title,close);
   const sessions=document.createElement("section"), sessionTitle=document.createElement("h3"), sessionNote=document.createElement("p"), reset=document.createElement("button");
   sessionTitle.textContent="대화 세션";
-  sessionNote.textContent="내 대화 목록을 비우고 새 세션을 시작합니다. 기존 기록은 ‘삭제한 대화’에서 복원할 수 있습니다.";
+  sessionNote.textContent="내 대화 목록을 비우고 새 세션을 시작합니다. 기존 기록은 계정 메뉴의 ‘대화 복원’에서 다시 꺼낼 수 있습니다.";
   reset.textContent="대화 목록 초기화";
   reset.onclick=()=>void resetConversations(reset,dialog);
   sessions.append(sessionTitle,sessionNote,reset);dialog.append(sessions);dialog.showModal();
@@ -1611,17 +1798,31 @@ function renderContextMeter(context, form = $("#composer-form"), pane = null) {
     bar=contextElement("div",undefined,"context-controls");
     const trigger=contextElement("button",undefined,"context-trigger");trigger.type="button";trigger.setAttribute("aria-label","컨텍스트 및 API 사용량");trigger.setAttribute("aria-haspopup","dialog");trigger.setAttribute("aria-expanded","false");
     const ring=contextElement("span",undefined,"context-ring"),label=contextElement("span",undefined,"context-label");ring.setAttribute("aria-hidden","true");label.setAttribute("aria-hidden","true");trigger.append(ring,label);trigger.onclick=()=>openContextPopover(trigger,pane);
-    bar.append(trigger);toolbar.append(bar);
+    bar.append(trigger);(usageSlot(form)||toolbar).append(bar);
     if(!pane){bar.id="context-controls";trigger.id="context-usage-button";ring.id="context-ring";label.id="context-label";}
   }
   const percent=contextPercent(context), owner=roomContextOwner(pane);
   $(".context-ring",bar).style.setProperty("--context",percent+"%");
   $(".context-label",bar).textContent=percent+"%";
+  bar.classList.toggle("is-high",percent>=80);
+  $(".context-trigger",bar).setAttribute("aria-label",`대화 맥락 ${percent}% 사용 · 사용량 보기`);
+  $(".context-trigger",bar).title=`대화 맥락 ${percent}% · 눌러서 사용량 보기`;
   bar.removeAttribute("title");
   $(".context-trigger",bar).disabled=!owner.roomId;
   if(contextPopover?.roomId===owner.roomId){renderPopoverContext(contextPopover.contextSection,context);contextPopover.compact.disabled=owner.busy||!owner.canManage||!(context?.usedChars>=500);}
   updateModelAvailability();
 }
+// Phones keep the usage ring inside the text row so the toolbar has room for
+// the model name; wider screens show it next to the microphone.
+const narrowComposer = matchMedia("(max-width: 720px)");
+function usageSlot(form) {
+  return narrowComposer.matches ? $(".composer-usage-inline", form) || $(".composer-usage-slot", form) : $(".composer-usage-slot", form);
+}
+function placeUsageRings() {
+  for (const bar of $$(".composer .context-controls")) { const slot = usageSlot(bar.closest("form")); if (slot && bar.parentElement !== slot) slot.append(bar); }
+  contextPopover?.position();
+}
+narrowComposer.addEventListener?.("change", placeUsageRings);
 let contextPopover = null;
 function closeContextPopover() {
   const open=contextPopover;if(!open)return;contextPopover=null;
@@ -1701,7 +1902,7 @@ function renderUsageSection(section, usage) {
 }
 async function openContextPopover(trigger,pane) {
   if(contextPopover?.trigger===trigger){closeContextPopover();return;}
-  closeContextPopover();
+  closeContextPopover();closeComposerPopover(false);
   const {roomId,data}=roomContextOwner(pane),userId=state.session?.user?.id;if(!roomId)return;
   const native=typeof HTMLElement.prototype.showPopover==="function";
   const element=contextElement(native?"div":"dialog",undefined,"context-popover");element.setAttribute("role","dialog");element.setAttribute("aria-label","컨텍스트 및 API 사용량");if(native)element.setAttribute("popover","auto");
@@ -1713,11 +1914,13 @@ async function openContextPopover(trigger,pane) {
   compact.onclick=()=>sessionAction("compact",pane,compact);
   element.append(header,contextSection,compact,usageSection);document.body.append(element);
   const open={element,trigger,roomId,pane,userId,native,contextSection,compact,cancelled:false,abort:new AbortController()};
+  // Opens above the usage ring, right-aligned to it, and is capped above the
+  // toolbar row so the microphone and send buttons stay visible and usable.
   open.position=()=>{
     if(!trigger.isConnected){closeContextPopover();return;}
-    const rect=trigger.getBoundingClientRect(),width=element.offsetWidth,height=element.offsetHeight;
-    element.style.left=Math.max(12,Math.min(innerWidth-width-12,rect.right-width))+"px";
-    element.style.top=Math.max(12,Math.min(innerHeight-height-12,rect.top-height-10))+"px";
+    element.style.maxHeight="";
+    const spot=placePopover(trigger.getBoundingClientRect(),{width:element.offsetWidth,height:Math.min(620,element.scrollHeight)},visibleViewport(),{align:"end",gap:10});
+    Object.assign(element.style,{left:spot.left+"px",top:spot.top+"px",maxHeight:Math.min(620,spot.maxHeight)+"px"});
   };
   contextPopover=open;trigger.setAttribute("aria-expanded","true");
   if(native){element.addEventListener("toggle",event=>{if(event.newState==="closed"&&contextPopover===open)closeContextPopover();});element.showPopover();}
@@ -1819,10 +2022,10 @@ function updateModelAvailability() {
     const form=select.closest("form");
     if(form) {
       const send=$('button[type="submit"]',form);
-      const blocked=composerBlocked(pane), queued=!!owner.data?.busy;
-      if(send){send.disabled=blocked;send.setAttribute("aria-label",queued?"대기열에 추가":"메시지 보내기");send.title=queued?"대기열에 추가 · 현재 답변이 끝나면 순서대로 보냅니다":"메시지 보내기";}
+      const blocked=composerBlocked(pane), queued=!!owner.data?.busy, recording=!pane&&!!(state.recording||state.recordingPending);
+      if(send){send.disabled=blocked||recording;send.setAttribute("aria-label",queued?"대기열에 추가":"메시지 보내기");send.title=recording?"녹음을 끝낸 뒤 보낼 수 있어요":queued?"대기열에 추가 · 지금 답변이 끝나면 차례로 보냅니다":"메시지 보내기";}
       const input=$("textarea",form);
-      if(input){input.disabled=!!blocked;if(!input.dataset.idlePlaceholder)input.dataset.idlePlaceholder=input.placeholder;input.placeholder=queued?"다음 요청을 입력하세요. Enter를 누르면 대기열에 추가됩니다.":input.dataset.idlePlaceholder;}
+      if(input){input.disabled=!!blocked;if(!input.dataset.idlePlaceholder)input.dataset.idlePlaceholder=input.placeholder;input.placeholder=queued?"다음 요청을 적으면 대기열에 추가돼요":input.dataset.idlePlaceholder;}
       const actions=$$(".context-action",form);
       if(actions[0])actions[0].disabled=owner.busy;
       if(actions[1])actions[1].disabled=owner.busy||!owner.canManage||!(owner.data?.context?.usedChars>=500);
@@ -1892,26 +2095,70 @@ function applyModels(models) {
     select.value=visible.some(model=>model.value===chosen)?chosen:"";
     select.dataset.chosen=select.value;
     if(!select._triggerButton){
-      const trigger=document.createElement("button");trigger.type="button";trigger.className="model-trigger";trigger.setAttribute("aria-label","모델 선택");trigger.setAttribute("aria-haspopup","dialog");
-      trigger.onclick=()=>openRecommendedModels(select,trigger);select.after(trigger);select._triggerButton=trigger;select.classList.add("custom-model-select");
+      const trigger=popoverTrigger(document.createElement("button"));trigger.type="button";trigger.className="model-trigger composer-chip model-chip";trigger.setAttribute("aria-haspopup","dialog");trigger.setAttribute("aria-expanded","false");
+      const mark=document.createElementNS("http://www.w3.org/2000/svg","svg");mark.setAttribute("class","icon");mark.setAttribute("aria-hidden","true");const use=document.createElementNS("http://www.w3.org/2000/svg","use");use.setAttribute("href","#i-spark");mark.append(use);
+      const text=document.createElement("span");text.className="composer-chip-label";const caret=composerSvg(["m7 10 5 5 5-5"]);caret.classList.add("composer-chip-caret");
+      trigger.append(mark,text,caret);trigger.onclick=()=>openModelPopover(select,trigger);
+      (select.closest(".model-fields")||select).after(trigger);select._triggerButton=trigger;select.classList.add("custom-model-select");
     }
-    select._triggerButton.textContent=(select.selectedOptions[0]?.textContent||"자동 선택 · 추천")+" ▾";
+    paintModelChip(select);
     select.title="추천 모델 · 자동 선택은 연결 상태에 따라 순환합니다";
   }
   updateModelAvailability();
 }
-function openRecommendedModels(select,trigger){
+function paintModelChip(select) {
+  const trigger=select?._triggerButton;if(!trigger)return;
+  const effort=$(".effort-select",select.closest("form")||document)?.value||"";
+  const model=select.selectedOptions[0]?.textContent||"자동 선택";
+  const label=modelChipLabel(model,effort);
+  $(".composer-chip-label",trigger).textContent=label;
+  trigger.setAttribute("aria-label",`모델과 생각 깊이: ${label}. 바꾸기`);
+  trigger.title=`모델: ${modelChipLabel(model,"")} · 생각 깊이: ${effortLabel(effort)}`;
+}
+// One small menu next to the chip: pick a model, then how deeply it should think.
+function openModelPopover(select,trigger){
   if(select.disabled)return;
-  const dialog=document.createElement("dialog");dialog.className="quick-model-picker";dialog.setAttribute("aria-label","추천 모델 선택");
-  const title=document.createElement("h2");title.textContent="추천 모델";dialog.append(title);
-  const entries=[{value:"",id:"",name:"자동 선택 · 추천"},...recommendedModels(state.models)];
+  const form=select.closest("form"), effortSelect=$(".effort-select",form);
+  const pop=document.createElement("div");pop.className="model-popover composer-popover";pop.setAttribute("role","dialog");pop.setAttribute("aria-label","모델과 생각 깊이");
+  const modelHead=document.createElement("h3");modelHead.className="composer-popover-heading";modelHead.textContent="모델";pop.append(modelHead);
+  const options=document.createElement("div");options.className="model-options";
+  const recommended=recommendedModels(state.models);
+  const entries=[{value:"",name:"자동 선택",detail:"연결 상태에 맞춰 알아서 골라요"},...recommended];
   const current=state.models.find(m=>m.value===select.value);if(current&&!entries.some(m=>m.value===current.value))entries.push(current);
-  for(const model of entries){const button=document.createElement("button");button.type="button";button.className="quick-model-option";button.textContent=(model.value?modelLabel(model):model.name)+(select.value===model.value?" ✓":"");button.setAttribute("aria-pressed",String(select.value===model.value));button.onclick=()=>{dialog.close();void requestModelChange(select,model.value);};dialog.append(button);}
-  const more=document.createElement("button");more.type="button";more.className="quick-model-more";more.textContent="전체 모델 검색 →";more.onclick=()=>{dialog.close();openModelBrowser(select,trigger);};dialog.append(more);
-  const close=document.createElement("button");close.type="button";close.className="quick-model-more";close.textContent="닫기";close.onclick=()=>dialog.close();dialog.append(close);
-  dialog.onclose=()=>{dialog.remove();if(trigger.isConnected&&!$("dialog[open]"))trigger.focus();};
-  dialog.addEventListener("click",event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}});
-  document.body.append(dialog);dialog.showModal();
+  let selected=null;
+  for(const model of entries){
+    const button=document.createElement("button");button.type="button";button.className="model-option quick-model-option";
+    const on=select.value===model.value;button.setAttribute("aria-pressed",String(on));if(on)selected=button;
+    const copy=document.createElement("span");copy.className="model-option-copy";
+    const name=document.createElement("strong");name.textContent=model.value?modelLabel(model):model.name;
+    const detail=document.createElement("small");detail.textContent=model.detail||(model.providers||[]).join(" · ");
+    copy.append(name);if(detail.textContent)copy.append(detail);
+    const check=composerSvg(["m5 12.5 4.5 4.5L19 7.5"]);check.classList.add("model-option-check");
+    button.append(copy,check);
+    // The chip is disabled while the change is confirmed, so focus returns to it afterwards.
+    button.onclick=()=>{closeComposerPopover(true);if(!on)void requestModelChange(select,model.value).finally(()=>{if((!document.activeElement||document.activeElement===document.body)&&trigger.isConnected&&!trigger.disabled)trigger.focus({preventScroll:true});});};
+    options.append(button);
+  }
+  pop.append(options);
+  if(state.models.length>recommended.length){
+    const more=document.createElement("button");more.type="button";more.className="model-more";more.textContent="전체 모델에서 찾기";
+    more.onclick=()=>{closeComposerPopover(true);openModelBrowser(select,trigger);};pop.append(more);
+  }
+  if(state.modelNotice){const note=document.createElement("p");note.className="model-popover-note";note.setAttribute("role","note");note.textContent=state.modelNotice;pop.append(note);}
+  if(effortSelect){
+    const effortHead=document.createElement("h3");effortHead.className="composer-popover-heading";effortHead.textContent="생각 깊이";effortHead.id=`effort-heading-${Date.now().toString(36)}`;
+    const hint=document.createElement("p");hint.className="model-popover-hint";hint.textContent="깊게 할수록 답이 느려질 수 있어요.";
+    const group=document.createElement("div");group.className="effort-options";group.setAttribute("role","radiogroup");group.setAttribute("aria-labelledby",effortHead.id);
+    const name=`effort-${Math.random().toString(36).slice(2)}`;
+    for(const [value,text] of EFFORTS){
+      const label=document.createElement("label");label.className="effort-option";
+      const input=document.createElement("input");input.type="radio";input.name=name;input.value=value;input.checked=(effortSelect.value||"")===value;
+      input.onchange=()=>{if(!input.checked)return;effortSelect.value=value;effortSelect.dispatchEvent(new Event("change",{bubbles:true}));paintModelChip(select);};
+      const span=document.createElement("span");span.textContent=text;label.append(input,span);group.append(label);
+    }
+    pop.append(effortHead,hint,group);
+  }
+  openComposerPopover(pop,trigger,{width:320,temporary:true,focus:selected});
 }
 let modelBrowser;
 function openModelBrowser(select,trigger) {
@@ -2039,25 +2286,27 @@ function renderExtraPanes() {
     const form = document.createElement("form");
     form.className = "composer pane-composer";
     form.addEventListener("submit", (event) => submitPane(event, index));
+    // Same shape as the main composer: text on top, one toolbar row below.
     const controls = document.createElement("div");
-    controls.className = "model-controls";
-    controls.append(modelSelect(pane), effortSelect(pane));
+    controls.className = "model-controls composer-toolbar";
+    const tools = document.createElement("div"), sendGroup = document.createElement("div"), usageSlot = document.createElement("span"), fields = document.createElement("span");
+    tools.className = "composer-tools"; sendGroup.className = "composer-send"; usageSlot.className = "composer-usage-slot"; fields.className = "model-fields"; fields.hidden = true;
+    fields.append(modelSelect(pane), effortSelect(pane));
     const row = document.createElement("div");
-    row.className = "composer-row";
+    row.className = "composer-input";
     const input = document.createElement("textarea");
     input.rows = 1;
     input.value=pane.draft || "";
-    input.addEventListener("input",()=>{pane.draft=input.value;});
+    input.addEventListener("input",()=>{pane.draft=input.value;input.style.height="auto";input.style.height=`${Math.min(input.scrollHeight,140)}px`;});
     input.addEventListener("paste", event => pasteAttachments(event, pane));
     input.maxLength = 4000;
-    input.placeholder = "메시지 보내기. model 이면 목록을 가져옵니다.";
+    input.placeholder = "무엇을 함께 해볼까요?";
+    input.enterKeyHint = touchComposer() ? "enter" : "send";
     input.setAttribute("aria-label", (room?.name || "대화") + " 메시지");
     input.addEventListener("keydown", (event) => {
-      if (event.isComposing || event.keyCode === 229) return;
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        form.requestSubmit();
-      }
+      if (!sendsOnEnter(event, { touch: touchComposer() })) return;
+      event.preventDefault();
+      form.requestSubmit();
     });
     const send = document.createElement("button");
     send.type = "submit";
@@ -2065,17 +2314,21 @@ function renderExtraPanes() {
     send.setAttribute("aria-label", "메시지 보내기");
     send.append(icon("arrow"));
     const attach = document.createElement("button");
-    attach.type = "button"; attach.className = "bot-picker-button attach-button";
+    attach.type = "button"; attach.className = "composer-icon attach-button";
     attach.setAttribute("aria-label", "사진 또는 음성 첨부"); attach.title = "사진 또는 음성 첨부 · 이미지 붙여넣기도 가능해요";
     attach.append(icon("attach"));
     const fileInput = document.createElement("input");
-    fileInput.type = "file"; fileInput.className = "sr-only"; fileInput.accept = "image/png,image/jpeg,image/webp,image/gif,audio/*"; fileInput.multiple = true;
+    fileInput.type = "file"; fileInput.className = "sr-only"; fileInput.accept = "image/png,image/jpeg,image/webp,image/gif,audio/*"; fileInput.multiple = true; fileInput.tabIndex = -1; fileInput.setAttribute("aria-hidden", "true");
     attach.onclick = () => { if (!composerBlocked(pane)) fileInput.click(); };
     fileInput.onchange = () => { void uploadAttachments(fileInput.files, pane); fileInput.value = ""; };
-    row.append(attach, fileInput, input, send);
+    const usageInline = document.createElement("span"); usageInline.className = "composer-usage-inline";
+    row.append(input, usageInline);
+    tools.append(attach, fileInput, fields);
+    sendGroup.append(usageSlot, send);
+    controls.append(tools, sendGroup);
     const attachmentList = document.createElement("div");
-    attachmentList.className = "attachment-list"; attachmentList.setAttribute("aria-live", "polite");
-    form.append(controls, row, attachmentList);
+    attachmentList.className = "attachment-list"; attachmentList.setAttribute("aria-live", "polite"); attachmentList.setAttribute("aria-label", "첨부 파일");
+    form.append(attachmentList, row, controls);
     renderContextMeter(pane.data?.context,form,pane);
     messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
@@ -2090,7 +2343,7 @@ function modelSelect(pane) {
   const label = document.createElement("label");
   label.append(document.createTextNode("모델 "));
   const select = document.createElement("select");
-  select.className = "model-select";
+  select.className = "model-select"; select.tabIndex = -1;
   select.setAttribute("aria-label", "모델");
   select.dataset.chosen = pane.model || "";
   select._pane=pane;
@@ -2100,11 +2353,11 @@ function modelSelect(pane) {
 }
 function effortSelect(pane) {
   const label = document.createElement("label");
-  label.append(document.createTextNode("effort "));
+  label.append(document.createTextNode("생각 깊이 "));
   const select = document.createElement("select");
-  select.className = "effort-select";
-  select.setAttribute("aria-label", "effort");
-  for (const [value, text] of [["", "기본"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"]]) {
+  select.className = "effort-select"; select.tabIndex = -1;
+  select.setAttribute("aria-label", "생각 깊이");
+  for (const [value, text] of EFFORTS) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = text;
@@ -2245,17 +2498,15 @@ function bind() {
   $("#branch-merge").addEventListener("click",()=>mergeBranch(currentBranchId()));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      $("#bot-picker").classList.add("is-hidden");
-      $("#bot-picker-button").setAttribute("aria-expanded", "false");
+      if (composerPopover) { if (!nativePopover) closeComposerPopover(true); return; }
       els.memberPanel.classList.remove("is-open");
       closeSidebar();
     }
   });
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest("#bot-picker, #bot-picker-button")) {
-      $("#bot-picker").classList.add("is-hidden");
-      $("#bot-picker-button").setAttribute("aria-expanded", "false");
-    }
+  // Without the popover API, a press outside an open composer popup closes it.
+  document.addEventListener("pointerdown", (event) => {
+    if (nativePopover || !composerPopover) return;
+    if (!composerPopover.pop.contains(event.target) && !composerPopover.trigger.contains(event.target)) closeComposerPopover(false);
   });
   $$("[data-auth-tab]").forEach((button) =>
     button.addEventListener("click", () => switchAuth(button.dataset.authTab)),
@@ -2287,6 +2538,7 @@ function bind() {
   $("#model-select").addEventListener("change",()=>{void requestModelChange($("#model-select"),$("#model-select").value);});
   $("#effort-select").addEventListener("change",()=>{
     saveRoomPreferences(state.selectedRoom,{model:$("#model-select").dataset.chosen || "",effort:$("#effort-select").value});
+    paintModelChip($("#model-select"));
   });
   $("#room-view").addEventListener("focusin", () => {
     if(state.focusPane===0)return;state.focusPane=0;desktopUI?.setRoom(state.selectedRoom);
@@ -2314,25 +2566,27 @@ function bind() {
     if (!state.recording) return;
     state.recordingCancelled = true;
     state.recording.stop();
-    toast("녹음을 취소했습니다.");
+    toast("녹음을 취소했어요.");
   });
+  $("#record-done-button").addEventListener("click", () => { if (state.recording) void toggleRecording(); });
+  $("#recording-bar").addEventListener("keydown", (event) => { if (event.key === "Escape" && state.recording) { event.preventDefault(); $("#record-cancel-button").click(); } });
   $("#message-input").addEventListener("paste", event => pasteAttachments(event));
+  // On touch keyboards Enter adds a line; the send button sends.
+  const syncEnterHint = () => { $("#message-input").enterKeyHint = touchComposer() ? "enter" : "send"; };
+  syncEnterHint(); touchQuery.addEventListener?.("change", syncEnterHint);
   $("#message-input").addEventListener("keydown", (event) => {
-    if (event.isComposing || event.keyCode === 229) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      $("#composer-form").requestSubmit();
-    }
+    if (!sendsOnEnter(event, { touch: touchComposer() })) return;
+    event.preventDefault();
+    $("#composer-form").requestSubmit();
   });
   $("#message-input").addEventListener("input", (event) => {
     event.target.style.height = "auto";
     event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
   });
-  $("#bot-picker-button").addEventListener("click", () => {
-    const picker = $("#bot-picker");
-    const hidden = picker.classList.toggle("is-hidden");
-    $("#bot-picker-button").setAttribute("aria-expanded", String(!hidden));
+  popoverTrigger($("#bot-picker-button")).addEventListener("click", () => {
+    openComposerPopover($("#bot-picker"), $("#bot-picker-button"), { width: 320 });
   });
+  bindComposerMore();
   $("#members-toggle").addEventListener("click", () =>
     els.memberPanel.classList.toggle("is-open"),
   );
@@ -2396,6 +2650,62 @@ function bind() {
     }),
   );
 }
+// Rarely used room actions (participants, invite, call, workspace, notifications)
+// live behind one "more" button so the input row stays calm.
+function bindComposerMore() {
+  const menu = $("#composer-more-menu"), button = popoverTrigger($("#composer-more-button"));
+  for (const [selector, label] of [["#members-toggle", "참여자"], ["#room-invite-button", "대화에 초대"], ["#voice-call-button", "전화 걸기"]]) $(selector).dataset.label = label;
+  button.addEventListener("click", () => { syncNoticeProxy(); openComposerPopover(menu, button); });
+  menu.addEventListener("click", (event) => {
+    const item = event.target.closest("button");
+    if (!item || item.disabled || !menu.contains(item)) return;
+    if (item.id === "composer-notice-item") { closeComposerPopover(false); $("#notification-bell")?.click(); return; }
+    closeComposerPopover(true);
+  });
+  const notices = $("#notification-center");
+  if (notices && window.MutationObserver) {
+    let frame = 0;
+    new MutationObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(syncNoticeProxy); })
+      .observe(notices, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
+  }
+  // A focus return to the hidden bell lands on the visible "more" button instead.
+  notices?.addEventListener("focusin", (event) => { if (event.target.id === "notification-bell" && event.target.closest("#composer-more")) button.focus({ preventScroll: true }); });
+}
+function syncNoticeProxy() {
+  const wrapper = $("#composer-more"), menu = $("#composer-more-menu"), item = $("#composer-notice-item"), button = $("#composer-more-button");
+  if (!wrapper || !item) return;
+  const bell = $("#notification-bell"), proxied = !!bell?.closest("#composer-more");
+  if (bell) {
+    if (proxied) { bell.tabIndex = -1; bell.setAttribute("aria-hidden", "true"); }
+    else { bell.removeAttribute("tabindex"); bell.removeAttribute("aria-hidden"); }
+  }
+  wrapper.hidden = !$(".topbar-actions", menu);
+  item.hidden = !proxied || !!$("#notification-center")?.hidden;
+  if (menu.lastElementChild !== item) menu.append(item);
+  const badge = $("#notification-center .notification-badge"), count = badge && !badge.hidden ? Number(badge.textContent) || 0 : 0;
+  $("#composer-notice-count").hidden = !count;
+  $("#composer-notice-count").textContent = count > 99 ? "99+" : String(count);
+  item.setAttribute("aria-label", count ? `알림, 읽지 않은 알림 ${count}개` : "알림");
+  button.classList.toggle("has-unread", proxied && count > 0);
+  button.setAttribute("aria-label", proxied && count ? `대화 도구 더 보기, 읽지 않은 알림 ${count}개` : "대화 도구 더 보기");
+}
+// While an on-screen keyboard covers part of the screen, the text field grows
+// less so the conversation keeps more room. The page itself is resized by the
+// browser (interactive-widget=resizes-content in the viewport meta).
+function trackKeyboardViewport() {
+  const view = window.visualViewport;
+  if (!view) return;
+  let frame = 0;
+  const update = () => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      const keyboard = touchComposer() && (innerHeight - view.height > 120 || (screen.height - view.height) / screen.height > .4);
+      document.documentElement.classList.toggle("keyboard-open", keyboard);
+    });
+  };
+  view.addEventListener("resize", update);
+  update();
+}
 function openPendingRoomInvite() {
   const token = inviteLinks.get("room");
   if (!state.session?.user || !token) return false;
@@ -2407,6 +2717,8 @@ window.addEventListener("hashchange", () => {
   if (state.session?.user) openPendingRoomInvite(); else showAuth();
 });
 bind();
+trackKeyboardViewport();
+for (const pop of [$("#bot-picker"), $("#composer-more-menu")]) prepareComposerPopover(pop);
 agentPresence = createAgentPresence({ mount: $("#agent-presence") });
 notificationUI = createNotificationCenter({ mount: $("#notification-center"), openRoom: async id => { await loadRooms(); await selectRoom(id); }, toast });
 pwaUI = createPwaController({ api, getSession: () => state.session, toast });
@@ -2435,7 +2747,7 @@ const workspaceButton = $(".topbar-actions .desktop-button");
 if (workspaceButton) {
   const monitor = document.createElementNS("http://www.w3.org/2000/svg", "svg"); monitor.setAttribute("class", "icon"); monitor.setAttribute("viewBox", "0 0 24 24"); monitor.setAttribute("aria-hidden", "true");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", "M4 4h16v12H4zM12 16v4m-4 0h8"); monitor.append(path); workspaceButton.replaceChildren(monitor);
-  workspaceButton.setAttribute("aria-label", "작업 공간 열기 또는 닫기"); workspaceButton.title = "작업 공간";
+  workspaceButton.setAttribute("aria-label", "작업 공간 열기 또는 닫기"); workspaceButton.title = "작업 공간"; workspaceButton.dataset.label = "작업 공간";
 }
 setupUI = createBotSetupUI({ api, getSession: () => state.session, onSaved: refreshSetupState, toast });
 mailUI = createMailUI({ api, getSession: () => state.session, toast, openRoom: async id => {await loadRooms();await selectRoom(id);} });
@@ -2455,7 +2767,8 @@ function applyDockLayout() {
   else if (!split && topbar.parentElement !== main) main.insertBefore(topbar, grid);
   topbar.classList.toggle("pane-bar", split);
   const actions = $(".topbar-actions");
-  const toolsHost = split ? topbar : $("#composer-form .model-controls");
+  const toolsHost = split ? topbar : $("#composer-more-menu");
+  if (split && composerPopover?.pop.id === "composer-more-menu") closeComposerPopover(false);
   if (actions && actions.parentElement !== toolsHost) toolsHost.append(actions);
   dockPanels().forEach((panel, index) => {
     panel.dataset.dockIndex = index;
@@ -2654,13 +2967,12 @@ function setupDock() {
       }
       if(sidebarState.loaded&&sidebarState.groups.length&&targetRoom.id!==MONITOR_ROOM)addAction("그룹으로 이동",()=>openRoomGroupPicker(targetRoom));
       addAction(targetRoom.pinned?"고정 해제":"상단에 고정",()=>updateRoomListPreference(targetRoom,{pinned:!targetRoom.pinned}));
-      addAction(targetRoom.archived?"대화 복원":"대화 삭제",()=>{
+      // The server only hides the room from this person's list (archived), so the
+      // wording says 보관, not 삭제, and points to where it can be restored.
+      addAction(targetRoom.archived?"대화 복원":"대화 보관",async()=>{
         if(targetRoom.archived) return updateRoomListPreference(targetRoom,{archived:false});
-        const dialog=document.createElement("dialog");dialog.className="quick-model-picker";
-        const text=document.createElement("p");text.textContent="내 대화 목록에서 삭제할까요? 삭제한 대화에서 복원할 수 있으며 다른 참여자의 대화는 유지됩니다.";
-        const confirm=document.createElement("button");confirm.textContent="삭제";confirm.onclick=()=>{dialog.close();updateRoomListPreference(targetRoom,{archived:true});};
-        const cancel=document.createElement("button");cancel.textContent="취소";cancel.onclick=()=>dialog.close();
-        dialog.append(text,confirm,cancel);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
+        const ok=await confirmDialog({title:"이 대화를 보관할까요?",body:`‘${targetRoom.name}’${topicParticle(targetRoom.name)} 내 목록에서만 사라지고 다른 참여자에게는 그대로 남아요. 계정 메뉴의 ‘대화 복원’에서 다시 꺼낼 수 있어요.`,confirmLabel:"보관",returnFocus:room||panel});
+        if(ok)void updateRoomListPreference(targetRoom,{archived:true});
       });
     }
     const reset=document.createElement("button");reset.type="button";reset.setAttribute("role","menuitem");reset.textContent="분할 닫기";reset.onclick=()=>{state.layout=2;setLayout(2);dockRects=[{x:0,y:0,w:1,h:1}];applyDockLayout();hide();};menu.append(reset);
