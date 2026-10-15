@@ -1,5 +1,5 @@
 import Busboy from "busboy";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, openSync, readSync, closeSync } from "node:fs";
 import { mkdir, chmod, unlink, stat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -25,6 +25,77 @@ const signature = (buf, mime) => {
   if (mime === "audio/mp4" || mime === "video/mp4") return buf.subarray(4, 8).toString() === "ftyp";
   return false;
 };
+
+// EXIF orientations 5-8 turn the picture a quarter turn when the browser draws it.
+function jpegOrientation(buf, start, end) {
+  if (buf.toString("latin1", start, start + 6) !== "Exif\0\0") return 1;
+  const tiff = start + 6;
+  const little = buf.toString("latin1", tiff, tiff + 2) === "II";
+  const u16 = (at) => at + 2 <= end ? (little ? buf.readUInt16LE(at) : buf.readUInt16BE(at)) : 0;
+  const u32 = (at) => at + 4 <= end ? (little ? buf.readUInt32LE(at) : buf.readUInt32BE(at)) : 0;
+  const ifd = tiff + u32(tiff + 4);
+  const count = u16(ifd);
+  for (let i = 0; i < count && i < 256; i++) {
+    const entry = ifd + 2 + i * 12;
+    if (entry + 12 > end) break;
+    if (u16(entry) === 0x0112) return u16(entry + 8) || 1;
+  }
+  return 1;
+}
+
+/** Pixel size of a PNG, GIF, WebP or JPEG header, as the browser will show it. */
+export function imageDimensions(buf, mime) {
+  if (!Buffer.isBuffer(buf)) return null;
+  const valid = (width, height) => Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 && width <= 65535 && height <= 65535 ? { width, height } : null;
+  try {
+    if (mime === "image/png" && buf.length >= 24 && buf.toString("latin1", 12, 16) === "IHDR") return valid(buf.readUInt32BE(16), buf.readUInt32BE(20));
+    if (mime === "image/gif" && buf.length >= 10) return valid(buf.readUInt16LE(6), buf.readUInt16LE(8));
+    if (mime === "image/webp" && buf.length >= 25) {
+      const chunk = buf.toString("latin1", 12, 16);
+      if (chunk === "VP8 " && buf.length >= 30) return valid(buf.readUInt16LE(26) & 0x3fff, buf.readUInt16LE(28) & 0x3fff);
+      if (chunk === "VP8L") { const b = buf.subarray(21, 25); return valid(1 + (((b[1] & 0x3f) << 8) | b[0]), 1 + (((b[3] & 0x0f) << 10) | (b[2] << 2) | ((b[1] & 0xc0) >> 6))); }
+      if (chunk === "VP8X" && buf.length >= 30) return valid(1 + buf.readUIntLE(24, 3), 1 + buf.readUIntLE(27, 3));
+      return null;
+    }
+    if (mime === "image/jpeg" && buf[0] === 0xff && buf[1] === 0xd8) {
+      let at = 2, orientation = 1;
+      while (at + 4 <= buf.length) {
+        if (buf[at] !== 0xff) return null;
+        const marker = buf[at + 1];
+        if (marker === 0xff) { at++; continue; }
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { at += 2; continue; }
+        if (marker === 0xd9 || marker === 0xda) return null;
+        const length = buf.readUInt16BE(at + 2);
+        if (length < 2) return null;
+        if (marker === 0xe1) orientation = jpegOrientation(buf, at + 4, Math.min(buf.length, at + 2 + length));
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          if (at + 9 > buf.length) return null;
+          const height = buf.readUInt16BE(at + 5), width = buf.readUInt16BE(at + 7);
+          return orientation >= 5 && orientation <= 8 ? valid(height, width) : valid(width, height);
+        }
+        at += 2 + length;
+      }
+    }
+  } catch { return null; }
+  return null;
+}
+
+const dimensionCache = new Map();
+/** Reads only the file header; results are kept per stored file, which forks share. */
+export function storedImageDimensions(path, mime) {
+  if (dimensionCache.has(path)) return dimensionCache.get(path);
+  let result = null, fd;
+  try {
+    fd = openSync(path, "r");
+    const head = Buffer.alloc(mime === "image/jpeg" ? 512 * 1024 : 64);
+    const read = readSync(fd, head, 0, head.length, 0);
+    result = imageDimensions(head.subarray(0, read), mime);
+  } catch { result = null; }
+  finally { if (fd !== undefined) closeSync(fd); }
+  if (dimensionCache.size >= 2000) dimensionCache.delete(dimensionCache.keys().next().value);
+  dimensionCache.set(path, result);
+  return result;
+}
 
 export async function prepareMediaDir(dataDir) {
   const dir = join(dataDir, "media");
