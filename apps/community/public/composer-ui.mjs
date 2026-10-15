@@ -29,7 +29,8 @@ export function botChipLabel(selectedIds, bots) {
   return names.length === 1 ? names[0] : `${names[0]} 외 ${names.length - 1}`;
 }
 
-export function formatDuration(ms) {
+// Milliseconds to "m:ss" for the recording clock and voice cards.
+export function formatElapsed(ms) {
   const seconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }

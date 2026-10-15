@@ -18,7 +18,7 @@ import { createVoiceCall } from "/voice-call.js";
 import { createMessageQueue } from "/message-queue.js";
 import { pasteComposerImages, uploadAttachmentFiles, clearAttachmentDraft, removeAttachmentDraft } from "/composer-attachments.mjs";
 import { suggestTopicSwitch } from "/topic-switch.mjs";
-import { EFFORTS, effortLabel, modelChipLabel, botChipLabel, formatDuration, toastDuration, sendsOnEnter, placePopover, RECORDING_LIMIT_MS, RECORDING_WARN_MS, ATTACHMENT_LIMIT, topicParticle } from "/composer-ui.mjs";
+import { EFFORTS, effortLabel, modelChipLabel, botChipLabel, formatElapsed, toastDuration, sendsOnEnter, placePopover, RECORDING_LIMIT_MS, RECORDING_WARN_MS, ATTACHMENT_LIMIT, topicParticle } from "/composer-ui.mjs";
 const inviteLinks = createInviteLinks();
 
 let dockRects = [{x:0,y:0,w:1,h:1}];
@@ -1335,7 +1335,7 @@ function renderPendingAttachments(pane = null) {
       };
       play.onclick = () => { if (audio.paused || audio.ended) { list.querySelectorAll("audio").forEach((other) => other !== audio && other.pause()); void audio.play().catch(() => toast("이 음성은 미리 들을 수 없어요.")); } else audio.pause(); };
       audio.addEventListener("play", paint); audio.addEventListener("pause", paint); audio.addEventListener("ended", paint);
-      audio.addEventListener("loadedmetadata", () => { if (Number.isFinite(audio.duration) && !item.uploading) status.textContent = `음성 · ${formatDuration(audio.duration * 1000)}`; });
+      audio.addEventListener("loadedmetadata", () => { if (Number.isFinite(audio.duration) && !item.uploading) status.textContent = `음성 · ${formatElapsed(audio.duration * 1000)}`; });
       paint(); card.append(play, audio);
     } else {
       const mark = document.createElement("span");
@@ -1407,7 +1407,7 @@ function setRecordingUI(mode) {
   clearInterval(recordingClock.timer);
   const tick = () => {
     const elapsed = Date.now() - recordingClock.started;
-    $("#recording-time").textContent = formatDuration(Math.min(elapsed, RECORDING_LIMIT_MS));
+    $("#recording-time").textContent = formatElapsed(Math.min(elapsed, RECORDING_LIMIT_MS));
     bar.classList.toggle("is-near-limit", elapsed >= RECORDING_WARN_MS);
   };
   if (mode === "recording") { recordingClock.started = Date.now(); tick(); recordingClock.timer = setInterval(tick, 250); $("#record-done-button").focus({ preventScroll: true }); }

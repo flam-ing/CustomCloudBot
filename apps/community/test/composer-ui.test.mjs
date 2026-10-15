@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { effortLabel, modelChipLabel, botChipLabel, formatDuration, toastDuration, sendsOnEnter, placePopover, EFFORTS } from "../public/composer-ui.mjs";
+import { effortLabel, modelChipLabel, botChipLabel, formatElapsed, toastDuration, sendsOnEnter, placePopover, EFFORTS } from "../public/composer-ui.mjs";
 
 test("model chip names the model and adds the thinking depth only when chosen", () => {
   assert.equal(modelChipLabel("자동 선택 · 추천", ""), "자동 선택");
@@ -21,10 +21,10 @@ test("bot chip shows who will answer in plain words", () => {
 });
 
 test("durations read as minutes and seconds, and toasts stay readable but brief", () => {
-  assert.equal(formatDuration(0), "0:00");
-  assert.equal(formatDuration(12_400), "0:12");
-  assert.equal(formatDuration(120_000), "2:00");
-  assert.equal(formatDuration(-5), "0:00");
+  assert.equal(formatElapsed(0), "0:00");
+  assert.equal(formatElapsed(12_400), "0:12");
+  assert.equal(formatElapsed(120_000), "2:00");
+  assert.equal(formatElapsed(-5), "0:00");
   assert.ok(toastDuration("복사했습니다.") >= 2600);
   assert.ok(toastDuration("가".repeat(500)) <= 7000);
 });
