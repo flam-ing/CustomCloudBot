@@ -1,24 +1,90 @@
-.voice-call-dialog { width:min(440px,calc(100vw - 32px)); padding:28px; border:1px solid #ffffff18; border-radius:28px; background:#19191e; color:#f5f3fa; box-shadow:0 24px 100px #0009; }
-.voice-call-dialog::backdrop { background:#08080a8c; backdrop-filter:blur(7px); }
-.voice-call-dialog .voice-call-top { display:flex; align-items:center; justify-content:space-between; color:#bbb4ca; font-size:13px; }
-.voice-call-dialog h2 { margin:24px 0 6px; font-size:23px; line-height:1.4; overflow-wrap:anywhere; text-align:center; }
-.voice-call-dialog .voice-call-time { text-align:center; color:#9992a8; font-variant-numeric:tabular-nums; font-size:13px; }
-.voice-orb { width:88px; height:88px; border-radius:50%; margin:27px auto 22px; display:grid; place-items:center; background:radial-gradient(circle at 32% 25%,#dbceff,#9274cf 58%,#4c3c72); box-shadow:0 0 50px #b998fa25; }
-.voice-orb svg { width:34px; height:34px; color:#231937; }
-.voice-call-dialog[data-stage="listening"] .voice-orb,.voice-call-dialog[data-stage="speaking"] .voice-orb { animation:voice-breathe 2s ease-in-out infinite; }
-.voice-call-status { text-align:center; min-height:24px; font-weight:600; }
-.voice-call-transcript { font-size:14px; color:#c4c0ce; line-height:1.7; max-height:140px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; margin:16px 0; }
-.voice-call-note { color:#aaa2b6; font-size:12px; line-height:1.7; text-align:center; margin:12px 0; }
-.voice-call-controls { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin-top:22px; }
-.voice-call-controls button,.voice-call-link { border:1px solid #ffffff20; border-radius:14px; padding:11px 16px; background:#ffffff09; color:inherit; font-size:14px; cursor:pointer; }
-.voice-call-controls .voice-start { background:#c1a5ef; color:#21162f; font-weight:700; border-color:transparent; }
-.voice-call-controls .voice-end { background:#b9425a; color:#fff; border-color:transparent; }
-.voice-call-controls button:disabled { opacity:.45; cursor:default; }
-.voice-call-controls [hidden] { display:none; }
-.voice-call-link { display:block; margin:18px auto 0; font-size:12px; background:transparent; border:0; color:#c1afe4; }
-.voice-call-pill { position:fixed; right:24px; bottom:24px; z-index:100; border:1px solid #c7a7ff55; border-radius:99px; background:#292033; color:#efe4ff; box-shadow:0 8px 36px #0006; padding:13px 20px; max-width:min(360px,90vw); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
-.voice-call-pill[hidden] { display:none; }
-.topbar-actions .voice-call-button.is-active { color:#cdb0ff; background:#b285f51a; }
-@keyframes voice-breathe { 50% { transform:scale(1.06); box-shadow:0 0 60px #b998fa45; } }
-@media (prefers-reduced-motion:reduce) { .voice-orb { animation:none!important; } }
-@media (max-width:520px) { .voice-call-dialog { padding:22px; } .voice-call-pill { bottom:16px; right:16px; } }
+/* A call is a focused view of the current conversation, with native-style controls. */
+dialog.voice-call-dialog {
+  --voice-ink: #333342;
+  --voice-soft: #787386;
+  --voice-accent: #8c76b2;
+  --voice-level: 0;
+  width: min(390px, calc(100vw - 28px));
+  max-height: calc(100dvh - 32px);
+  box-sizing: border-box;
+  padding: 18px 28px 22px;
+  border: 1px solid #ffffffe6;
+  border-radius: 36px;
+  color: var(--voice-ink);
+  background: linear-gradient(155deg, #ffffffd6, #f1edf5b3);
+  box-shadow: 0 30px 100px #36334830, inset 0 1px 0 #fff;
+  -webkit-backdrop-filter: blur(36px) saturate(1.25);
+  backdrop-filter: blur(36px) saturate(1.25);
+  overflow: auto;
+  animation: voice-call-enter .24s cubic-bezier(.2,.8,.2,1) both;
+}
+dialog.voice-call-dialog::backdrop { background: #25233428; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.voice-call-dialog .voice-call-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--voice-soft); font-size: 12px; letter-spacing: .03em; }
+.voice-call-dialog .voice-call-top .icon-button { display: grid; place-items: center; width: 36px; height: 36px; margin: 0; padding: 8px; border: 0; border-radius: 50%; color: var(--voice-soft); background: #ffffff50; cursor: pointer; }
+.voice-call-dialog svg { display: block; width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.voice-call-identity { margin-top: 26px; text-align: center; }
+.voice-call-dialog h2 { margin: 18px 0 6px; color: var(--voice-ink); font-size: 25px; line-height: 1.3; font-weight: 600; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.voice-call-dialog .voice-call-time { min-height: 21px; color: var(--voice-soft); font-size: 15px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.voice-orb { display: grid; place-items: center; position: relative; width: 128px; height: 128px; margin: 0 auto; border-radius: 50%; background: #ffffff2e; box-shadow: inset 0 1px 0 #ffffff70; }
+.voice-orb::before { content: ""; position: absolute; inset: -7px; border-radius: inherit; border: 1px solid transparent; pointer-events: none; }
+.voice-orb img { display: block; width: 116px; height: 116px; object-fit: contain; filter: drop-shadow(0 6px 8px #43385b18); }
+.voice-call-dialog[data-stage="connecting"] .voice-orb::before { border-top-color: #9e89b66b; border-right-color: #9e89b61f; animation: voice-connect 1.8s linear infinite; }
+.voice-call-activity { margin: 15px 0 0; text-align: center; }
+.voice-wave { display: flex; align-items: center; justify-content: center; gap: 4px; height: 30px; color: var(--voice-accent); opacity: .4; }
+.voice-wave i { width: 3px; height: 6px; border-radius: 3px; background: currentColor; transform-origin: center; transition: height .1s linear, opacity .2s; }
+.voice-wave i:nth-child(2), .voice-wave i:nth-child(4) { --voice-height: 15px; }
+.voice-wave i:nth-child(3) { --voice-height: 24px; }
+.voice-call-dialog[data-stage="listening"] .voice-wave { opacity: .9; }
+.voice-call-dialog[data-stage="listening"] .voice-wave i { height: calc(6px + var(--voice-level) * var(--voice-height, 9px)); }
+.voice-call-dialog[data-stage="speaking"] .voice-wave { opacity: .9; }
+.voice-call-dialog[data-stage="speaking"] .voice-wave i { animation: voice-answer .8s ease-in-out infinite alternate; }
+.voice-call-dialog[data-stage="speaking"] .voice-wave i:nth-child(2) { animation-delay: -.3s; }
+.voice-call-dialog[data-stage="speaking"] .voice-wave i:nth-child(3) { animation-delay: -.55s; }
+.voice-call-dialog[data-stage="speaking"] .voice-wave i:nth-child(4) { animation-delay: -.15s; }
+.voice-call-dialog[data-stage="speaking"] .voice-wave i:nth-child(5) { animation-delay: -.4s; }
+.voice-call-status { min-height: 21px; color: var(--voice-ink); font-size: 14px; line-height: 1.55; font-weight: 500; }
+.voice-call-dialog .voice-call-transcript { min-height: 38px; max-height: 96px; margin: 16px 0 0; overflow: auto; color: var(--voice-soft); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-align: center; scrollbar-width: thin; }
+.voice-call-dialog .voice-send { display: block; margin: 5px auto 0; padding: 5px 10px; border: 0; border-radius: 8px; color: var(--voice-soft); background: transparent; font-size: 12px; cursor: pointer; }
+.voice-call-dialog .voice-send[hidden] { display: block; visibility: hidden; }
+.voice-call-dialog .voice-call-controls { display: flex; align-items: flex-start; justify-content: center; gap: 48px; margin: 24px 0 0; }
+.voice-call-dialog .voice-call-controls button { display: flex; flex-direction: column; align-items: center; gap: 9px; min-width: 72px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--voice-ink); font: inherit; cursor: pointer; }
+.voice-call-dialog .voice-control-icon { display: grid; place-items: center; width: 66px; height: 66px; box-sizing: border-box; border: 1px solid #ffffffcc; border-radius: 50%; background: #ffffff99; box-shadow: 0 4px 14px #45405c0a; transition: background .18s, transform .18s, box-shadow .18s; }
+.voice-call-dialog .voice-control-icon svg { width: 27px; height: 27px; }
+.voice-call-dialog .voice-control-label { font-size: 12px; line-height: 1.5; }
+.voice-call-dialog .voice-mute[aria-pressed="true"] .voice-control-icon { background: #655675; color: #fff; border-color: transparent; }
+.voice-mic-slash { display: none; }
+.voice-call-dialog[data-muted="true"] .voice-mic-slash { display: block; }
+.voice-call-dialog .voice-call-controls .voice-end { color: var(--voice-ink); background: transparent; }
+.voice-call-dialog .voice-end .voice-control-icon { color: #fff; border-color: transparent; background: #e24a58; box-shadow: 0 5px 18px #d6314820; }
+.voice-call-dialog .voice-end svg { fill: currentColor; stroke-width: 1; }
+.voice-call-dialog .voice-call-controls .voice-start { display: block; min-width: 142px; padding: 15px 24px; border-radius: 26px; background: #487f63; color: #fff; font-size: 14px; }
+.voice-call-dialog .voice-call-controls button:disabled { opacity: .45; cursor: default; }
+.voice-call-dialog .voice-call-controls [hidden] { display: none; }
+.voice-call-dialog .voice-call-note { margin: 24px auto 0; max-width: 245px; color: var(--voice-soft); text-align: center; font-size: 10px; line-height: 1.6; }
+.voice-call-dialog button:focus-visible { outline: 2px solid var(--voice-accent); outline-offset: 5px; }
+.voice-call-dialog button:active .voice-control-icon { transform: scale(.94); }
+.voice-call-dialog button:hover .voice-control-icon { box-shadow: 0 6px 20px #45405c1a; }
+.voice-call-pill { position: fixed; right: 24px; bottom: 24px; z-index: 100; border: 1px solid #ffffffcc; border-radius: 99px; background: #f5f2fbd9; color: #655675; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 8px 36px #3e345626; padding: 13px 20px; max-width: min(360px,90vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.voice-call-pill[hidden] { display: none; }
+.voice-call-button.is-active { color: #4a856a; background: #7bc09b1a; }
+@keyframes voice-call-enter { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes voice-connect { to { transform: rotate(360deg); } }
+@keyframes voice-answer { from { height: 6px; } to { height: var(--voice-height, 15px); } }
+@media (max-width: 520px) {
+  dialog.voice-call-dialog { padding: 16px 24px 22px; border-radius: 30px; }
+  .voice-call-identity { margin-top: 20px; }
+  .voice-call-pill { bottom: 16px; right: 16px; }
+}
+@media (max-height: 640px) {
+  .voice-call-identity { margin-top: 8px; }
+  .voice-orb { width: 90px; height: 90px; }
+  .voice-orb img { width: 86px; height: 86px; }
+  .voice-call-dialog h2 { margin-top: 10px; font-size: 22px; }
+  .voice-call-dialog .voice-call-controls { margin-top: 14px; }
+  .voice-call-dialog .voice-call-note { margin-top: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  dialog.voice-call-dialog, .voice-orb::before, .voice-wave i { animation: none !important; }
+  .voice-call-dialog *, .voice-call-dialog *::before { transition: none !important; }
+  .voice-call-dialog[data-stage="speaking"] .voice-wave i { height: var(--voice-height, 9px); }
+}

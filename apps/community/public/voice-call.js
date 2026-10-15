@@ -4,13 +4,23 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   const dialog = document.createElement("dialog");
   dialog.className = "voice-call-dialog";
   dialog.setAttribute("aria-labelledby", "voice-call-title");
-  dialog.innerHTML = `<div class="voice-call-top"><span>대화에 전화하기</span><button type="button" class="icon-button voice-minimize" aria-label="통화 창 접기">⌄</button></div>
-    <h2 id="voice-call-title"></h2><div class="voice-call-time"></div>
-    <div class="voice-orb"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg></div>
-    <div class="voice-call-status" role="status"></div><p class="voice-call-transcript"></p>
-    <p class="voice-call-note">말하면 이 대화에 전송되고, 답변을 음성으로 들려드려요.<br>웹 통화 중에는 이 앱을 화면에 열어두세요.</p>
-    <div class="voice-call-controls"><button type="button" class="voice-start">통화 시작</button><button type="button" class="voice-mute" hidden>마이크 끄기</button><button type="button" class="voice-send" hidden>말 끝내기</button><button type="button" class="voice-end" hidden>통화 종료</button></div>
-    <button type="button" class="voice-call-link">이 대화 통화 링크 복사</button>`;
+  dialog.innerHTML = `<div class="voice-call-top">
+      <button type="button" class="icon-button voice-minimize" aria-label="통화 창 접기" title="접어두고 대화 보기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+      <span>음성 통화</span>
+      <button type="button" class="icon-button voice-call-link" aria-label="이 대화 통화 링크 복사" title="통화 링크 복사"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-5 6-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m0 12a4 4 0 0 0 6 0l4-4a4 4 0 0 0-6-6l-1 1"/></svg></button>
+    </div>
+    <div class="voice-call-identity"><div class="voice-orb"><img src="/media/agent/idle-poster.webp" alt="" width="128" height="128" draggable="false"></div>
+      <h2 id="voice-call-title"></h2><div class="voice-call-time" aria-label="통화 시간"></div></div>
+    <div class="voice-call-activity"><div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="voice-call-status" role="status" aria-live="polite"></div></div>
+    <p class="voice-call-transcript"></p>
+    <button type="button" class="voice-send" hidden>말 끝내기</button>
+    <div class="voice-call-controls">
+      <button type="button" class="voice-start" hidden>다시 통화</button>
+      <button type="button" class="voice-mute" aria-label="마이크 끄기" aria-pressed="false" hidden><span class="voice-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/><path class="voice-mic-slash" d="m3 3 18 18"/></svg></span><span class="voice-control-label">음소거</span></button>
+      <button type="button" class="voice-end" aria-label="통화 종료" hidden><span class="voice-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 14v3a1 1 0 0 0 1 1l4-1v-4a15 15 0 0 1 8 0v4l4 1a1 1 0 0 0 1-1v-3c0-5-18-5-18 0Z"/></svg></span><span class="voice-control-label">종료</span></button>
+    </div>
+    <p class="voice-call-note"></p>`;
   const pill = document.createElement("button");
   pill.type = "button"; pill.className = "voice-call-pill"; pill.hidden = true;
   document.body.append(dialog, pill);
@@ -32,16 +42,24 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
   function renderStage(stage, label) {
     dialog.dataset.stage = stage; status.textContent = label;
     sendButton.disabled = stage !== "listening";
-    muteButton.textContent = active?.muted ? "마이크 켜기" : "마이크 끄기";
-    muteButton.setAttribute("aria-pressed", String(!!active?.muted));
+    sendButton.hidden = stage !== "listening";
+    if (stage !== "listening") dialog.style.setProperty("--voice-level", "0");
+    renderMute();
     pill.textContent = `${active?.title || target?.name || "대화"} · ${label}`;
+  }
+  function renderMute() {
+    const muted = !!active?.muted;
+    dialog.dataset.muted = String(muted);
+    muteButton.querySelector(".voice-control-label").textContent = muted ? "음소거 해제" : "음소거";
+    muteButton.setAttribute("aria-label", muted ? "마이크 켜기" : "마이크 끄기");
+    muteButton.setAttribute("aria-pressed", String(muted));
   }
   function show() { if (!dialog.open) dialog.showModal(); pill.hidden = true; }
   function minimize() { dialog.close(); pill.hidden = !active; }
   function updateNote() {
     find(".voice-call-note").textContent = nativeAudio()
-      ? "말하면 이 대화에 전송되고, 답변을 음성으로 들려드려요. 아이폰 화면을 꺼도 통화는 이어집니다."
-      : "말하면 이 대화에 전송되고, 답변을 음성으로 들려드려요. 웹 통화 중에는 이 앱을 화면에 열어두세요.";
+      ? "이 대화의 맥락을 이어갑니다 · 화면을 꺼도 통화가 유지돼요"
+      : "이 대화의 맥락을 이어갑니다 · 통화 중에는 앱을 열어두세요";
   }
   function showControls() {
     startButton.hidden = true; muteButton.hidden = sendButton.hidden = endButton.hidden = false;
@@ -80,7 +98,7 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
       if (!call.nativeAudio) window.speechSynthesis?.cancel();
       nativeWait?.reject(new Error("통화가 종료됐어요.")); nativeWait = null;
     }
-    startButton.hidden = false; startButton.disabled = false; startButton.textContent = "통화 시작";
+    startButton.hidden = false; startButton.disabled = false; startButton.textContent = "다시 통화";
     muteButton.hidden = sendButton.hidden = endButton.hidden = true; pill.hidden = true;
     document.querySelectorAll(".voice-call-button").forEach(button => button.classList.remove("is-active"));
     renderStage("ended", message);
@@ -199,6 +217,7 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
       if (!current(call)) return;
       analyser.getFloatTimeDomainData(values);
       const rms = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / values.length);
+      dialog.style.setProperty("--voice-level", String(Math.min(1, rms * 8)));
       const decision = gate.sample(rms, performance.now());
       if (decision === "send" || decision === "discard") call.finishUtterance();
     }, 60);
@@ -208,10 +227,11 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
     if (active || !target || !getSession()?.user) return;
     const usesNativeAudio = nativeAudio();
     if (!usesNativeAudio && (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia || !(window.AudioContext || window.webkitAudioContext) || !window.speechSynthesis)) {
+      startButton.hidden = false;
       renderStage("error", "이 브라우저에서는 통화를 지원하지 않아요. 최신 Safari 또는 Chrome을 사용해 주세요."); return;
     }
     const selection = getSelection(target.id);
-    if (!usesNativeAudio && !selection.botIds?.length) { renderStage("error", "응답할 봇 연결을 먼저 확인해 주세요."); return; }
+    if (!usesNativeAudio && !selection.botIds?.length) { startButton.hidden = false; renderStage("error", "응답할 봇 연결을 먼저 확인해 주세요."); return; }
     beforeStart();
     const call = {id:crypto.randomUUID(), roomId:target.id, title:target.name, userId:getSession().user.id, controller:new AbortController(), turn:0, muted:false, ready:false, native:!!nativeBridge(), nativeAudio:usesNativeAudio, ...selection};
     active = call;
@@ -253,15 +273,18 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
       startClock(call);
     } catch (error) { fail(call, error); }
   }
-  function open(room) {
+  function open(room, {startImmediately = true} = {}) {
     updateNote();
     if (active) { show(); if (room?.id !== active.roomId) toast(`현재 통화는 ‘${active.title}’에 연결되어 있어요.`); return; }
+    if (!getSession()?.user) { toast("로그인한 뒤 통화를 시작해 주세요."); return; }
     if (!room || room.archived || room.id === "00000000-0000-4000-8000-000000000001") { toast("전화할 대화를 먼저 선택해 주세요."); return; }
-    target = {id:room.id, name:room.name}; title.textContent = room.name; transcript.textContent = ""; find(".voice-call-time").textContent = "이 대화의 이전 내용을 이어서 통화합니다";
-    renderStage("ready", "이 대화로 연결할까요?"); show();
+    target = {id:room.id, name:room.name}; title.textContent = room.name; transcript.textContent = ""; find(".voice-call-time").textContent = "";
+    startButton.hidden = startImmediately; startButton.textContent = "통화 연결";
+    renderStage("ready", startImmediately ? "통화를 연결하고 있어요" : "눌러서 이 대화에 연결하세요"); show();
+    if (startImmediately) void start();
   }
   startButton.onclick = () => void start();
-  endButton.onclick = () => end();
+  endButton.onclick = () => { end(); dialog.close(); };
   sendButton.onclick = () => { if (active?.nativeAudio) native("finish"); else active?.finishUtterance?.(); };
   function setMuted(muted) {
     if (!active) return;
@@ -269,7 +292,7 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
     active.muted = muted;
     if (active.ready && active.muted && ["listening", "connecting"].includes(dialog.dataset.stage)) { releaseCapture(active); renderStage("muted", "마이크가 꺼져 있어요"); }
     else if (active.ready && !active.muted && dialog.dataset.stage === "muted") { const call = active; void listen(call).catch(error => fail(call,error)); }
-    muteButton.textContent = active.muted ? "마이크 켜기" : "마이크 끄기"; muteButton.setAttribute("aria-pressed",String(active.muted));
+    renderMute();
   }
   muteButton.onclick = () => { if (active) setMuted(!active.muted); };
   find(".voice-minimize").onclick = minimize; pill.onclick = show;
@@ -325,6 +348,8 @@ export function createVoiceCall({api, getSession, getRoom, getSelection, onMessa
     if (url.searchParams.get("call") !== "1" || !getSession()?.user) return;
     const room = getRoom(url.searchParams.get("room"));
     url.searchParams.delete("call"); history.replaceState(null,"",url);
-    if (room) open(room); else toast("이 통화 대화에 참여한 계정으로 로그인해 주세요.");
+    // Opening an external link has no audio user gesture. Joining here grants it;
+    // the in-app phone button calls open() directly and needs no extra click.
+    if (room) open(room, {startImmediately:false}); else toast("이 통화 대화에 참여한 계정으로 로그인해 주세요.");
   }};
 }

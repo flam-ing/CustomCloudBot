@@ -11,7 +11,7 @@ import { createInviteLink, createInviteLinks } from "/invite-links.mjs";
 import { createProfileSettings } from "/profile-settings.js";
 import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
-import { layoutBranches } from "/branch-graph.mjs";
+import { layoutBranches, branchGraphGeometry, branchDisplayName } from "/branch-graph.mjs";
 import { sessionColors } from "/session-colors.js";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
@@ -33,6 +33,7 @@ const state = {
   botChoiceTouched: false,
   pollTimer: null,
   pollBusy: false,
+  activityBusy: false,
   sending: false,
   pendingSend: null,
   roomRequest: 0,
@@ -239,6 +240,7 @@ async function loadSession() {
 }
 $("#startup-retry").addEventListener("click", loadSession);
 function showAuth() {
+  closeComposerPicker();
   voiceUI?.reset();
   messageQueueUI?.reset();
   messageQueueUI?.render($("#composer-form"), null);
@@ -317,6 +319,7 @@ async function enterWorkspace() {
   notificationUI?.setSession(state.session);
   agentPresence?.set("idle", true);
   pwaUI?.setSession(state.session);
+  closeComposerPicker();
   resetSidebarState(user.id);
   const workspaceEpoch=sidebarEpoch;
   await Promise.all([loadSidebar(),loadRooms()]);
@@ -380,6 +383,7 @@ async function loadRooms() {
   }
 }
 let showDeletedRooms=false;
+let sessionSearch="";
 let sidebarState={userId:null,groups:[],roomOrder:[],width:280,loaded:false};
 let sidebarConfirmed={groups:[],roomOrder:[],width:280};
 let sidebarEpoch=0,sidebarRevision=0,sidebarWriteQueue=Promise.resolve();
@@ -397,7 +401,8 @@ function applySidebarWidth() {
   handle.setAttribute("aria-disabled",String(!sidebarState.loaded));
 }
 function resetSidebarState(userId=null) {
-  sidebarEpoch+=1;sidebarRevision=0;showDeletedRooms=false;
+  sidebarEpoch+=1;sidebarRevision=0;showDeletedRooms=false;sessionSearch="";
+  $("#session-search").value="";$("#sidebar-search-wrap").hidden=true;$("#sidebar-search-toggle").setAttribute("aria-expanded","false");
   clearTimeout(sidebarWidthTimer);sidebarWidthTimer=null;sidebarPreviewWidth=null;
   sidebarState={userId,groups:[],roomOrder:[],width:280,loaded:false};sidebarConfirmed={groups:[],roomOrder:[],width:280};
   els.workspace.classList.remove("sidebar-resizing","sidebar-collapsed");applySidebarWidth();
@@ -582,9 +587,6 @@ function paintSession(element, color) {
   else { element.style.removeProperty("--pane-tint"); element.style.removeProperty("--session-color"); }
 }
 function syncSessionColors(colors = sessionColors(state.rooms, state.forks)) {
-  const notices = $("#notification-center");
-  const noticeHost = !state.selectedRoom || state.selectedRoom === MONITOR_ROOM ? $(".profile-row") : $(".topbar-actions");
-  if (notices && noticeHost && notices.parentElement !== noticeHost) noticeHost.append(notices);
   dockPanels().forEach((panel, index) => paintSession(panel, colors.get(dockRoomAt(index))));
   paintSession($("#branch-current"), colors.get(currentBranchId()));
 }
@@ -603,39 +605,40 @@ function renderRooms() {
     }
     if (!archived.length) { const empty = document.createElement("p"); empty.className = "search-empty"; empty.textContent = "보관된 가지가 없습니다."; els.roomList.append(empty); }
   } else {
-    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder});
+    const graph = layoutBranches(state.rooms.filter(room => room.id !== MONITOR_ROOM), state.forks, {order:sidebarState.roomOrder,query:sessionSearch});
     const graphList = document.createElement("div"); graphList.className = "branch-graph";
-    const width = Math.min(72, Math.max(30, graph.laneCount * 13 + 12)), step = graph.laneCount > 1 ? (width - 18) / (graph.laneCount - 1) : 0;
-    graphList.style.setProperty("--branch-rail", width + "px");
-    const svg = branchSvg("svg", {class:"branch-lines", width, height:graph.rows.length * 56, "aria-hidden":"true"});
-    const byId = new Map(graph.rows.map(row => [row.id,row])), x = row => 9 + row.lane * step, y = row => row.index * 56 + 28;
-    for (const edge of graph.edges) {
-      const from = byId.get(edge.from), to = byId.get(edge.to), fromX=x(from), toX=x(to), end=y(to), start=y(from);
-      const direction = end >= start ? 1 : -1;
-      const d = fromX === toX ? `M${fromX},${start}V${end}` : `M${fromX},${start}V${end-18*direction}Q${fromX},${end} ${(fromX+toX)/2},${end}H${toX}`;
-      svg.append(branchSvg("path", {d, style:`--branch-color:${colors.get(from.id)?.color || "currentColor"}`, class:`branch-path branch-color-${from.lane % 3}${edge.secondary ? " is-merge" : ""}`}));
+    const geometry = branchGraphGeometry(graph);
+    graphList.style.setProperty("--branch-rail", geometry.width + "px");
+    const svg = branchSvg("svg", {class:"branch-lines", width:geometry.width, height:geometry.height, "aria-hidden":"true"});
+    const byId = new Map(graph.rows.map(row => [row.id,row]));
+    for (const edge of geometry.paths) {
+      svg.append(branchSvg("path", {d:edge.d, style:`--branch-color:${colors.get(edge.to)?.color || "currentColor"}`, class:`branch-path${edge.secondary ? " is-merge" : ""}${edge.from===currentBranchId()||edge.to===currentBranchId()?" is-current":""}`}));
     }
+    const positions = new Map(geometry.nodes.map(node => [node.id,node]));
     for (const row of graph.rows) {
-      const active = currentBranchId() === row.id;
-      svg.append(branchSvg("circle", {cx:x(row), cy:y(row), r:active?5:3.5, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node branch-color-${row.lane % 3}${active?" is-selected":""}`}));
+      const active = currentBranchId() === row.id, position = positions.get(row.id);
+      svg.append(branchSvg("circle", {cx:position.x, cy:position.y, r:active?4:3, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node${active?" is-selected":""}`,"data-activity-room":row.id}));
       const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
       button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
       const copy=document.createElement("span"); copy.className="branch-row-copy";
-      const name=document.createElement("strong"); name.textContent=(row.room.pinned?"· ":"")+row.room.name;
+      const name=document.createElement("strong"); name.textContent=(row.room.pinned?"· ":"")+branchDisplayName(row);
       const meta=document.createElement("small"), parentNames=row.parents.map(id=>byId.get(id)?.room.name).filter(Boolean);
       const relation=row.operation==="merge"?"Merge":row.operation==="fork"?"Fork":"줄기";
-      meta.textContent=relation+(parentNames.length?" · "+parentNames.join(" + "):"")+(row.room.pinned?" · 고정":"");
+      meta.textContent=(row.operation==="merge"?"합친 대화":row.operation==="fork"?"이어진 대화":"")+(row.room.pinned?" · 고정":"");
       button.title = "드래그: 목록 사이에서 순서 이동 · 제목 위에서 Merge · 대화 영역에서 분할";
       button.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
       button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":""}`);
-      copy.append(name,meta); button.append(copy); paintSession(button, colors.get(row.id));
-      button.onclick=()=>{if(state.focusPane>0)assignExtra(state.focusPane-1,row.id);else void selectRoom(row.id);closeSidebar();};
+      copy.append(name,meta); button.append(copy);
+      const grip=document.createElement("span");grip.className="session-drag-handle";grip.setAttribute("aria-hidden","true");grip.title="잡고 이동";grip.innerHTML='<svg viewBox="0 0 24 24"><path d="M8 5v14m8-14v14M5 8l3-3 3 3m2 8 3 3 3-3"/></svg>';button.append(grip);
+      paintSession(button, colors.get(row.id));
+      button.onclick=event=>{if(event.target.closest(".session-drag-handle"))return;if(state.focusPane>0)assignExtra(state.focusPane-1,row.id);else void selectRoom(row.id);closeSidebar();};
       graphList.append(button);
     }
     graphList.prepend(svg); els.roomList.append(graphList);
-    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent="아래 계정 메뉴에서 새 대화를 시작하세요.";els.roomList.append(empty); }
+    if (!graph.rows.length) { const empty=document.createElement("p");empty.className="search-empty";empty.textContent=sessionSearch?"검색한 세션이 없습니다.":"위의 + 버튼으로 새 세션을 시작하세요.";els.roomList.append(empty); }
   }
   syncSessionColors(colors);
+  syncSessionActivity();
   if(focus){const target=$$("button",els.roomList).find(button=>button.dataset.roomId===focus.roomId&&button.dataset.branchAction===focus.action);target?.focus({preventScroll:true});}
 }
 function openArchivedConversations() {
@@ -653,6 +656,7 @@ function openArchivedConversations() {
   dialog.addEventListener("close", () => { dialog.remove(); $("#profile-customize").focus(); }); document.body.append(dialog); dialog.showModal();
 }
 function showEmpty() {
+  closeComposerPicker();
   clearPendingAttachments();
   state.selectedRoom = null;
   state.roomData = null;
@@ -668,6 +672,7 @@ function showEmpty() {
   renderRooms();
 }
 async function selectRoom(id) {
+  closeComposerPicker();
   if (!id) return;
   closeContextPopover();
   const previous = state.selectedRoom;
@@ -802,11 +807,35 @@ async function refreshRoom(force = false) {
     if (request === state.roomRequest) state.pollBusy = false;
   }
 }
+function syncSessionActivity() {
+  const nodes=new Map($$("[data-activity-room]",els.roomList).map(node=>[node.dataset.activityRoom,node]));
+  for(const row of $$(".branch-row",els.roomList)) {
+    const id=row.dataset.roomId, room=state.rooms.find(room=>room.id===id);
+    const pane=state.extra.find(pane=>pane.roomId===id);
+    const busy=(state.selectedRoom===id?state.sending||state.roomData?.busy:pane?.sending||pane?.data?.busy)||room?.busy;
+    row.classList.toggle("is-working",!!busy);
+    nodes.get(id)?.classList.toggle("is-working",!!busy);
+    if(busy)row.setAttribute("aria-description","작업 진행 중");else row.removeAttribute("aria-description");
+  }
+}
+async function refreshSidebarActivity() {
+  const userId=state.session?.user?.id,epoch=sidebarEpoch;if(!userId||state.activityBusy||document.hidden)return;
+  state.activityBusy=true;
+  try {
+    const data=await api("/api/rooms/activity");
+    if(userId!==state.session?.user?.id||epoch!==sidebarEpoch)return;
+    const activity=new Map(data.rooms.map(room=>[room.id,room.busy]));
+    for(const room of state.rooms)room.busy=!!activity.get(room.id);
+    syncSessionActivity();
+  } catch { /* The next normal poll retries; unavailable status is not a chat error. */ }
+  finally {state.activityBusy=false;}
+}
 function startPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(() => {
     refreshRoom();
     refreshExtras();
+    void refreshSidebarActivity();
   }, 3000);
 }
 function stopPolling() {
@@ -816,6 +845,8 @@ function stopPolling() {
 }
 function observeRoomOutcome(data) {
   const roomId=data?.room?.id; if(!roomId)return;
+  const listed=state.rooms.find(room=>room.id===roomId);if(listed)listed.busy=!!data.busy;
+  syncSessionActivity();
   const outcome=failedOutcome(data.messages);
   if(presenceTurns.has(roomId) && presenceTurns.get(roomId)!==outcome.humanId)presenceErrors.delete(roomId);
   presenceTurns.set(roomId,outcome.humanId);
@@ -1604,7 +1635,7 @@ function contextElement(tag, text, className) {
 }
 function renderContextMeter(context, form = $("#composer-form"), pane = null) {
   if(!form)return;
-  const toolbar=$(".model-controls",form);
+  const toolbar=$(".composer-tools",form);
   if(!toolbar)return;
   let bar=$(".context-controls",form);
   if(!bar) {
@@ -1810,12 +1841,14 @@ function composerBlocked(pane = null) {
 }
 function updateModelAvailability() {
   updateBranchControls();
+  syncSessionActivity();
   updateAgentPresence();
   for(const select of $$(".model-select")) {
     const pane=select._pane||null,owner=roomContextOwner(pane);
     const disabled=!owner.roomId||owner.busy;
     select.disabled=disabled;
     if(select._triggerButton)select._triggerButton.disabled=disabled;
+    const effort=$(".effort-select",select.closest("form"));if(effort){effort.disabled=disabled;if(effort._triggerButton)effort._triggerButton.disabled=disabled;}
     const form=select.closest("form");
     if(form) {
       const send=$('button[type="submit"]',form);
@@ -1892,27 +1925,83 @@ function applyModels(models) {
     select.value=visible.some(model=>model.value===chosen)?chosen:"";
     select.dataset.chosen=select.value;
     if(!select._triggerButton){
-      const trigger=document.createElement("button");trigger.type="button";trigger.className="model-trigger";trigger.setAttribute("aria-label","모델 선택");trigger.setAttribute("aria-haspopup","dialog");
+      const trigger=document.createElement("button");trigger.type="button";trigger.className="model-trigger";trigger.setAttribute("aria-label","모델 선택");trigger.setAttribute("aria-haspopup","menu");trigger.setAttribute("aria-expanded","false");
       trigger.onclick=()=>openRecommendedModels(select,trigger);select.after(trigger);select._triggerButton=trigger;select.classList.add("custom-model-select");
     }
-    select._triggerButton.textContent=(select.selectedOptions[0]?.textContent||"자동 선택 · 추천")+" ▾";
+    setPickerTrigger(select._triggerButton,select.value?(select.selectedOptions[0]?.textContent||"모델"):"자동 선택");
     select.title="추천 모델 · 자동 선택은 연결 상태에 따라 순환합니다";
   }
+  decorateEffortPickers();
   updateModelAvailability();
+}
+function setPickerTrigger(button,label) {
+  const text=contextElement("span",label),chevron=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  chevron.setAttribute("viewBox","0 0 16 16");chevron.setAttribute("aria-hidden","true");chevron.innerHTML='<path d="m4 6 4 4 4-4"/>';
+  button.replaceChildren(text,chevron);
+}
+let composerPicker=null;
+function closeComposerPicker(restoreFocus=false) {
+  const open=composerPicker;if(!open)return;composerPicker=null;
+  open.trigger.setAttribute("aria-expanded","false");
+  window.removeEventListener("resize",open.reposition);document.removeEventListener("pointerdown",open.outside,true);
+  window.removeEventListener("scroll",open.scroll,true);open.element.remove();
+  if(restoreFocus&&open.trigger.isConnected&&!$("dialog[open]"))open.trigger.focus();
+}
+function openComposerPicker(trigger,title,options,{after}={}) {
+  if(composerPicker?.trigger===trigger){closeComposerPicker(true);return;}
+  closeComposerPicker();
+  const element=contextElement("div",undefined,"composer-picker");element.setAttribute("role","menu");element.setAttribute("aria-label",title);element.setAttribute("popover","auto");
+  element.append(contextElement("div",title,"picker-heading"));
+  for(const option of options) {
+    const button=contextElement("button",undefined,"picker-option");button.type="button";button.setAttribute("role","menuitemradio");button.setAttribute("aria-checked",String(!!option.selected));
+    const copy=contextElement("span",undefined,"picker-option-copy");copy.append(contextElement("span",option.label,"picker-option-label"));
+    if(option.detail)copy.append(contextElement("span",option.detail,"picker-option-detail"));
+    button.append(copy,contextElement("span",option.selected?"✓":"","picker-check"));
+    button.onclick=()=>{closeComposerPicker(true);option.select();};element.append(button);
+  }
+  if(after){const button=contextElement("button",after.label,"picker-option picker-all");button.type="button";button.setAttribute("role","menuitem");button.onclick=()=>{closeComposerPicker();after.select();};element.append(button);}
+  const reposition=()=>{
+    if(!trigger.isConnected){closeComposerPicker();return;}
+    const rect=trigger.getBoundingClientRect(),width=element.offsetWidth,height=element.offsetHeight;
+    element.style.left=Math.max(10,Math.min(rect.right-width,innerWidth-width-10))+"px";
+    const above=rect.top-height-9; element.style.top=Math.max(10,above>=10?above:Math.min(rect.bottom+9,innerHeight-height-10))+"px";
+  };
+  const outside=event=>{if(!element.contains(event.target)&&!trigger.contains(event.target))closeComposerPicker();};
+  const scroll=event=>{if(!element.contains(event.target))reposition();};
+  composerPicker={element,trigger,reposition,outside,scroll};trigger.setAttribute("aria-expanded","true");
+  document.body.append(element);if(typeof element.showPopover==="function")element.showPopover();reposition();
+  element.addEventListener("toggle",event=>{if(event.newState==="closed"&&composerPicker?.element===element)closeComposerPicker();});
+  element.addEventListener("keydown",event=>{
+    const buttons=$$("button",element),index=buttons.indexOf(document.activeElement);
+    if(event.key==="Escape"){event.preventDefault();event.stopPropagation();closeComposerPicker(true);}
+    else if(["ArrowDown","ArrowUp","Home","End"].includes(event.key)) {
+      event.preventDefault();const next=event.key==="Home"?0:event.key==="End"?buttons.length-1:(index+(event.key==="ArrowDown"?1:-1)+buttons.length)%buttons.length;buttons[next]?.focus();
+    }else if(event.key==="Tab")closeComposerPicker(true);
+  });
+  document.addEventListener("pointerdown",outside,true);window.addEventListener("resize",reposition);window.addEventListener("scroll",scroll,true);
+  ($('[aria-checked="true"]',element)||$("button",element))?.focus({preventScroll:true});
 }
 function openRecommendedModels(select,trigger){
   if(select.disabled)return;
-  const dialog=document.createElement("dialog");dialog.className="quick-model-picker";dialog.setAttribute("aria-label","추천 모델 선택");
-  const title=document.createElement("h2");title.textContent="추천 모델";dialog.append(title);
-  const entries=[{value:"",id:"",name:"자동 선택 · 추천"},...recommendedModels(state.models)];
+  const entries=[{value:"",id:"",name:"자동 선택"},...recommendedModels(state.models)];
   const current=state.models.find(m=>m.value===select.value);if(current&&!entries.some(m=>m.value===current.value))entries.push(current);
-  for(const model of entries){const button=document.createElement("button");button.type="button";button.className="quick-model-option";button.textContent=(model.value?modelLabel(model):model.name)+(select.value===model.value?" ✓":"");button.setAttribute("aria-pressed",String(select.value===model.value));button.onclick=()=>{dialog.close();void requestModelChange(select,model.value);};dialog.append(button);}
-  const more=document.createElement("button");more.type="button";more.className="quick-model-more";more.textContent="전체 모델 검색 →";more.onclick=()=>{dialog.close();openModelBrowser(select,trigger);};dialog.append(more);
-  const close=document.createElement("button");close.type="button";close.className="quick-model-more";close.textContent="닫기";close.onclick=()=>dialog.close();dialog.append(close);
-  dialog.onclose=()=>{dialog.remove();if(trigger.isConnected&&!$("dialog[open]"))trigger.focus();};
-  dialog.addEventListener("click",event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}});
-  document.body.append(dialog);dialog.showModal();
+  openComposerPicker(trigger,"모델",entries.map(model=>({label:model.value?modelLabel(model):"자동 선택",detail:model.value?(model.providers||[]).join(" · "):"연결된 모델 중에서 자동으로 선택",selected:select.value===model.value,select:()=>void requestModelChange(select,model.value)})),{after:{label:"전체 모델 검색",select:()=>openModelBrowser(select,trigger)}});
 }
+function decorateEffortPickers() {
+  for(const select of $$(".effort-select")) {
+    if(!select._triggerButton) {
+      const trigger=contextElement("button",undefined,"effort-trigger");trigger.type="button";trigger.setAttribute("aria-label","생각의 깊이 선택");trigger.setAttribute("aria-haspopup","menu");trigger.setAttribute("aria-expanded","false");
+      select.after(trigger);select._triggerButton=trigger;select.classList.add("custom-effort-select");
+      trigger.onclick=()=>{
+        if(select.disabled)return;
+        const detail={"":"모델의 기본 설정","low":"빠르게 답하기","medium":"균형 있게 살펴보기","high":"더 깊게 검토하기","xhigh":"복잡한 문제를 충분히 검토하기"};
+        openComposerPicker(trigger,"생각의 깊이",[...select.options].map(option=>({label:option.textContent,detail:detail[option.value],selected:option.value===select.value,select:()=>{if(select.disabled||!select.isConnected)return;select.value=option.value;select.dispatchEvent(new Event("change",{bubbles:true}));decorateEffortPickers();}})));
+      };
+    }
+    setPickerTrigger(select._triggerButton,"생각: "+(select.selectedOptions[0]?.textContent||"기본"));
+  }
+}
+
 let modelBrowser;
 function openModelBrowser(select,trigger) {
   if(select.disabled)return;
@@ -1985,6 +2074,7 @@ function setLayout(count) {
 }
 function renderExtraPanes() {
   if(contextPopover?.pane)closeContextPopover();
+  closeComposerPicker();
   syncProgressStreams();
   const grid = $("#pane-grid");
   const spans = { 5: [2, 2, 2, 3, 3], 7: [3, 3, 3, 3, 4, 4, 4] }[state.layout];
@@ -2012,7 +2102,9 @@ function renderExtraPanes() {
     header.append(title);
     const desktopButton = document.createElement("button");
     desktopButton.type = "button";
-    desktopButton.textContent = "작업 공간";
+    desktopButton.className = "icon-button desktop-button";
+    desktopButton.setAttribute("aria-label","작업 공간 열기");desktopButton.title="작업 공간";
+    desktopButton.innerHTML='<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h18v13H3zM8 21h8m-4-4v4"/></svg>';
     desktopButton.disabled = !pane.roomId;
     desktopButton.addEventListener("click", () => desktopUI?.openRoom(pane.roomId));
     header.append(desktopButton);
@@ -2042,6 +2134,8 @@ function renderExtraPanes() {
     const controls = document.createElement("div");
     controls.className = "model-controls";
     controls.append(modelSelect(pane), effortSelect(pane));
+    const tools=document.createElement("div");tools.className="composer-tools";
+    const footer=document.createElement("div");footer.className="composer-footer";footer.append(controls);
     const row = document.createElement("div");
     row.className = "composer-row";
     const input = document.createElement("textarea");
@@ -2050,7 +2144,7 @@ function renderExtraPanes() {
     input.addEventListener("input",()=>{pane.draft=input.value;});
     input.addEventListener("paste", event => pasteAttachments(event, pane));
     input.maxLength = 4000;
-    input.placeholder = "메시지 보내기. model 이면 목록을 가져옵니다.";
+    input.placeholder = "무엇을 함께 해볼까요?";
     input.setAttribute("aria-label", (room?.name || "대화") + " 메시지");
     input.addEventListener("keydown", (event) => {
       if (event.isComposing || event.keyCode === 229) return;
@@ -2075,7 +2169,7 @@ function renderExtraPanes() {
     row.append(attach, fileInput, input, send);
     const attachmentList = document.createElement("div");
     attachmentList.className = "attachment-list"; attachmentList.setAttribute("aria-live", "polite");
-    form.append(controls, row, attachmentList);
+    form.append(tools, row, attachmentList, footer);
     renderContextMeter(pane.data?.context,form,pane);
     messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
@@ -2088,7 +2182,7 @@ function renderExtraPanes() {
 }
 function modelSelect(pane) {
   const label = document.createElement("label");
-  label.append(document.createTextNode("모델 "));
+  label.append(contextElement("span","모델","sr-only"));
   const select = document.createElement("select");
   select.className = "model-select";
   select.setAttribute("aria-label", "모델");
@@ -2100,17 +2194,18 @@ function modelSelect(pane) {
 }
 function effortSelect(pane) {
   const label = document.createElement("label");
-  label.append(document.createTextNode("effort "));
+  label.append(contextElement("span","effort","sr-only"));
   const select = document.createElement("select");
   select.className = "effort-select";
   select.setAttribute("aria-label", "effort");
-  for (const [value, text] of [["", "기본"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"]]) {
+  for (const [value, text] of [["", "기본"], ["low", "낮음"], ["medium", "보통"], ["high", "높음"], ["xhigh", "최대"]]) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = text;
     select.append(option);
   }
   select.value = pane.effort || "";
+  select._pane=pane;
   select.addEventListener("change", () => { pane.effort = select.value; saveRoomPreferences(pane.roomId, {model:pane.model || "", effort:pane.effort}); });
   label.append(select);
   return label;
@@ -2241,8 +2336,12 @@ function bind() {
   setupSidebarResize();
   document.body.append($("#profile-menu"));
   $("#create-sidebar-group").addEventListener("click",()=>openSidebarGroupEditor());
-  $("#branch-fork").addEventListener("click",()=>void sessionAction("fork",null,$("#branch-fork"),null,null,currentBranchId()));
-  $("#branch-merge").addEventListener("click",()=>mergeBranch(currentBranchId()));
+  $("#sidebar-search-toggle").addEventListener("click",()=>{
+    const wrap=$("#sidebar-search-wrap");wrap.hidden=!wrap.hidden;$("#sidebar-search-toggle").setAttribute("aria-expanded",String(!wrap.hidden));
+    if(!wrap.hidden)$("#session-search").focus();else{sessionSearch="";$("#session-search").value="";renderRooms();}
+  });
+  $("#session-search").addEventListener("input",event=>{sessionSearch=event.target.value;renderRooms();});
+  $("#session-search").addEventListener("keydown",event=>{if(event.key==="Escape"){event.stopPropagation();$("#sidebar-search-toggle").click();$("#sidebar-search-toggle").focus();}});
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       $("#bot-picker").classList.add("is-hidden");
@@ -2278,7 +2377,7 @@ function bind() {
       toast(error.message);
     }
   });
-  ["#create-room-button", "#empty-create-button"].forEach((selector) =>
+  ["#create-room-button", "#empty-create-button", "#sidebar-new-session"].forEach((selector) =>
     $(selector).addEventListener("click", startNewSession),
   );
   $("#room-form").addEventListener("submit", createRoom);
@@ -2455,7 +2554,7 @@ function applyDockLayout() {
   else if (!split && topbar.parentElement !== main) main.insertBefore(topbar, grid);
   topbar.classList.toggle("pane-bar", split);
   const actions = $(".topbar-actions");
-  const toolsHost = split ? topbar : $("#composer-form .model-controls");
+  const toolsHost = split ? topbar : $("#composer-form .composer-tools");
   if (actions && actions.parentElement !== toolsHost) toolsHost.append(actions);
   dockPanels().forEach((panel, index) => {
     panel.dataset.dockIndex = index;
@@ -2586,7 +2685,7 @@ function setupDock() {
     else if(drop.kind==="merge"){
       if(branchBusy(roomId)||branchBusy(drop.targetId)){toast("진행 중인 작업이 끝난 뒤 합쳐 주세요.");return;}
       mergeBranch(drop.targetId,roomId);
-    }else placeDock(drop.index,drop.side);
+    }else{placeDock(drop.index,drop.side);closeSidebar();}
   }
   function stopPointer() {
     if(scrollFrame!==null)cancelAnimationFrame(scrollFrame);scrollFrame=null;
@@ -2609,11 +2708,14 @@ function setupDock() {
     if (event.button!==0 || pendingDock?.placing || event.target.closest("select,input,textarea")) return;
     const room=event.target.closest("[data-dock-room]"),handle=event.target.closest(".pane-bar[data-dock-index],.header-identity[data-dock-index]");
     if(!room&&(!handle||event.target.closest("button")))return;
+    // Touching a row scrolls the list. Only the explicit handle starts a touch drag.
+    if(event.pointerType==="touch"&&room&&!event.target.closest(".session-drag-handle"))return;
+    if(event.pointerType==="touch"&&handle&&!room)return;
     pointerDock={id:event.pointerId,epoch:sidebarEpoch,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,source:room?{roomId:room.dataset.dockRoom}:{index:Number(handle.dataset.dockIndex)}};
   });
   document.addEventListener("pointermove", event => {
     if(!pointerDock||event.pointerId!==pointerDock.id)return;
-    if(event.buttons===0){stopPointer();return;}
+    if(event.pointerType!=="touch"&&event.buttons===0){stopPointer();return;}
     if(pointerDock.epoch!==sidebarEpoch){stopPointer();return;}
     pointerDock.lastX=event.clientX;pointerDock.lastY=event.clientY;
     if(!pointerDock.active&&Math.hypot(event.clientX-pointerDock.x,event.clientY-pointerDock.y)<7)return;
@@ -2627,6 +2729,7 @@ function setupDock() {
   });
   document.addEventListener("click",event=>{if(suppressClick){event.preventDefault();event.stopImmediatePropagation();}},true);
   document.addEventListener("pointercancel",stopPointer);
+  els.roomList.addEventListener("scroll",()=>{if(pointerDock&&!pointerDock.active)stopPointer();},{passive:true});
   document.body.addEventListener("lostpointercapture",event=>{if(event.target===document.body&&pointerDock?.id===event.pointerId)stopPointer();});
   window.addEventListener("blur",stopPointer);
   document.addEventListener("dragstart",event=>{if(event.target.closest("[data-dock-room],.pane-bar[data-dock-index]"))event.preventDefault();});

@@ -1590,6 +1590,12 @@ export async function startCommunity(options = {}) {
         if (user.role !== "admin") throw failure(403, "관리자 전용입니다.");
         return reply(res, 200, await readMonitor(env.COMMUNITY_MONITOR_PATH));
       }
+      if (url.pathname === "/api/rooms/activity" && method === "GET") {
+        const rooms = db.prepare("SELECT room_id FROM room_members WHERE user_id=?").all(user.id)
+          .filter(item => { try { roomFor(item.room_id, user); return true; } catch { return false; } })
+          .map(item => ({id:item.room_id, busy:roomJobs.has(item.room_id)}));
+        return reply(res, 200, {rooms});
+      }
       if (url.pathname === "/api/rooms" && method === "GET") {
         if (user.role === "admin") transaction(() => {
           const id=personalRoomId(user.id);
@@ -1609,7 +1615,7 @@ export async function startCommunity(options = {}) {
           )
           .all(user.id)
           .filter(room => { try { roomFor(room.id, user); return true; } catch { return false; } })
-          .map(room => ({...roomView(room), ...roomPreference(user.id, room.id)}));
+          .map(room => ({...roomView(room), ...roomPreference(user.id, room.id), busy:roomJobs.has(room.id)}));
         const memberIds = new Set(rooms.map((room) => room.id));
         return reply(res, 200, {
           rooms,

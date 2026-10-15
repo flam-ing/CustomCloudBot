@@ -1,5 +1,6 @@
 // A room's UUID supplies its random-looking seed. Pane order, titles and refreshes
-// never change its color, and forks stay close to their original root's hue.
+// never change its color. Forks share a family, with enough separation to tell
+// adjacent branches apart rather than merely tinting them a degree or two.
 function hash(value) {
   let result = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -64,10 +65,38 @@ export function sessionColors(rooms = [], forks = []) {
     root ??= roots.get(current);
     for (const member of path) roots.set(member, root);
   }
-  return new Map([...ids].map(id => {
-    const root = roots.get(id), base = hash('root:' + root) % 360;
-    const variation = id === root ? 0 : hash('fork:' + id) % 29 - 14;
+  const colors = new Map(), offsets = new Map(), children = new Map([...ids].map(id => [id, []]));
+  const created = new Map((Array.isArray(rooms) ? rooms : []).filter(room => room && ids.has(room.id)).map(room => [room.id, typeof room.createdAt === 'number' ? room.createdAt : Date.parse(room.createdAt) || 0]));
+  for (const id of ids) {
+    const parent = parents.get(id);
+    // Break the canonical cycle at its root, just as the root lookup does above.
+    if (id !== roots.get(id) && parent) children.get(parent).push(id);
+  }
+  // Existing branches keep their choices as newer siblings are appended. Sorting
+  // by creation then ID makes input ordering, search and drag placement irrelevant.
+  for (const siblings of children.values()) siblings.sort((a, b) => created.get(a) - created.get(b) || a.localeCompare(b));
+  const usedByParent = new Map();
+  const pending = [...ids].filter(id => id === roots.get(id));
+  for (let cursor = 0; cursor < pending.length; cursor += 1) {
+    const id = pending[cursor], root = roots.get(id), base = hash('root:' + root) % 360;
+    const seed = hash('fork:' + id), parentOffset = offsets.get(parents.get(id)) ?? 0;
+    const used = usedByParent.get(parents.get(id)) ?? new Set();
+    const choices = [-48, -36, -24, -12, 0, 12, 24, 36, 48].filter(value => Math.abs(value - parentOffset) >= 24);
+    const separation = value => Math.min(...[...used].map(previous => Math.abs(value - previous)), 96);
+    const best = Math.max(...choices.map(separation));
+    const available = choices.filter(value => separation(value) === best);
+    const variation = id === root ? 0 : available[seed % available.length];
+    if (id !== root) { used.add(variation); usedByParent.set(parents.get(id), used); }
     const hue = (base + variation + 360) % 360;
-    return [id, {hue, tint: rgb(hue, 0.65, 0.60), color: `hsl(${hue} 54% 27%)`}];
-  }));
+    // Alternate light/dark tints as well as hue. Pale glass otherwise makes even
+    // fairly different neighboring blues look almost identical.
+    const light = id === root ? 0.60 : variation > 0 ? 0.50 + (seed % 5) / 100 : 0.67 + (seed % 5) / 100;
+    const saturation = id === root ? 0.65 : variation > 0 ? 0.73 : 0.56;
+    const textSaturation = id === root ? 54 : variation > 0 ? 64 : 48;
+    const textLightness = id === root ? 27 : variation > 0 ? 24 : 28;
+    colors.set(id, {hue, tint: rgb(hue, saturation, light), color: `hsl(${hue} ${textSaturation}% ${textLightness}%)`});
+    offsets.set(id, variation);
+    pending.push(...children.get(id));
+  }
+  return new Map([...ids].map(id => [id, colors.get(id)]));
 }

@@ -190,8 +190,11 @@
       <section id="workspace-view" class="workspace-view is-hidden">
         <aside id="sidebar" class="sidebar" aria-label="대화 목록">
           <div id="sidebar-resizer" class="sidebar-resizer" role="separator" tabindex="0" aria-label="대화 목록 너비 조절" aria-controls="sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="420" aria-valuenow="280" aria-disabled="true"></div>
-          <div class="sidebar-top mobile-only">
+          <div class="sidebar-header">
+            <div id="agent-presence" class="agent-presence" aria-label="에이전트"></div>
             <div class="sidebar-actions">
+              <button id="sidebar-new-session" class="icon-button" type="button" aria-label="새 세션" title="새 세션"><svg class="icon"><use href="#i-plus" /></svg></button>
+              <button id="sidebar-search-toggle" class="icon-button" type="button" aria-label="세션 검색" title="세션 검색" aria-expanded="false" aria-controls="sidebar-search-wrap"><svg class="icon"><use href="#i-search" /></svg></button>
               <button
                 id="mobile-close"
                 class="icon-button mobile-only"
@@ -202,8 +205,8 @@
               </button>
             </div>
           </div>
-          <div class="sidebar-heading branch-heading"><span>가지</span><div class="branch-heading-actions"><button id="branch-fork" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-fork" /></svg>Fork</button><button id="branch-merge" type="button" disabled>Merge</button></div><button id="create-sidebar-group" type="button" hidden disabled>+ 그룹</button></div>
-          <p id="branch-current" class="branch-current">새 줄기에서 시작하세요</p>
+          <div id="sidebar-search-wrap" class="sidebar-search-wrap" hidden><input id="session-search" type="search" placeholder="세션 검색" aria-label="세션 검색" autocomplete="off" /></div>
+          <button id="create-sidebar-group" type="button" hidden disabled>+ 그룹</button>
           <nav id="room-list" class="room-list" aria-label="대화 분기 그래프"></nav>
           <div class="sidebar-bottom">
             <div class="profile-row">
@@ -255,7 +258,6 @@
               <h1 id="room-title">대화</h1>
             </div>
             </div>
-            <div id="agent-presence" class="agent-presence" aria-label="에이전트"></div>
             <span id="mobile-room-title" class="sr-only"></span
             ><span id="room-kicker" class="sr-only"></span>
             <div class="topbar-actions">
@@ -266,7 +268,7 @@
                 >데모 · 실제 AI 미연결</span
               ><button
                 id="members-toggle"
-                class="icon-button members-button"
+                class="icon-button members-button" hidden
                 type="button"
                 aria-label="참여자 보기"
                 title="참여자"
@@ -274,17 +276,17 @@
                 <svg class="icon" aria-hidden="true"><use href="#i-people" /></svg><span id="member-count">0</span></button
               ><button
                 id="room-invite-button"
-                class="icon-button is-hidden"
+                class="icon-button is-hidden" hidden
                 type="button"
                 aria-label="대화에 초대"
                 title="대화에 초대"
               >
                 <svg class="icon"><use href="#i-invite" /></svg>
               </button>
-              <div id="notification-center"></div>
               <button id="voice-call-button" class="icon-button voice-call-button" type="button" aria-label="이 대화에 전화하기" title="이 대화에 전화하기"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg></button>
             </div>
           </header>
+          <div class="workspace-notifications"><div id="notification-center"></div></div>
           <div id="pane-grid" class="pane-grid" data-panes="1">
           <section id="empty-state" class="empty-state">
             <h2>새 대화</h2>
@@ -323,22 +325,7 @@
                 aria-live="polite"
               ></div>
               <form id="composer-form" class="composer">
-                <div class="model-controls">
-                  <label>모델
-                    <select id="model-select" class="model-select" aria-label="모델">
-                      <option value="">자동 순환</option>
-                    </select>
-                  </label>
-                  <label>effort
-                    <select id="effort-select" class="effort-select" aria-label="effort">
-                      <option value="">기본</option>
-                      <option value="low">low</option>
-                      <option value="medium">medium</option>
-                      <option value="high">high</option>
-                      <option value="xhigh">xhigh</option>
-                    </select>
-                  </label>
-                </div>
+                <div class="composer-tools"></div>
                 <div
                   id="bot-picker"
                   class="bot-picker is-hidden"
@@ -391,6 +378,10 @@
                   </button>
                 </div>
                 <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
+                <div class="composer-footer"><div class="model-controls">
+                  <label><span class="sr-only">모델</span><select id="model-select" class="model-select" aria-label="모델"><option value="">자동 선택</option></select></label>
+                  <label><span class="sr-only">effort</span><select id="effort-select" class="effort-select" aria-label="effort"><option value="">기본</option><option value="low">낮음</option><option value="medium">보통</option><option value="high">높음</option><option value="xhigh">최대</option></select></label>
+                </div></div>
               </form>
               <div class="composer-caption">
                 <span id="bot-picker-label">AI 답변 꺼짐 · 사람끼리 대화</span
