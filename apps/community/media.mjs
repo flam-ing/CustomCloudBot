@@ -91,7 +91,7 @@ export async function receiveAttachment(req, { mediaDir, maxBytes = MAX_DEFAULT,
       let settled = false;
       const finish = (err, value) => { if (settled) return; settled = true; err ? reject(err) : resolve(value); };
       let bb;
-      try { bb = Busboy({ headers: req.headers, limits: { files: 1, fields: 2, parts: 3, fileSize: maxBytes } }); busboy = bb; }
+      try { bb = Busboy({ headers: req.headers, defParamCharset: "utf8", limits: { files: 1, fields: 2, parts: 3, fileSize: maxBytes } }); busboy = bb; }
       catch { const e = new Error("multipart 요청 형식을 확인해 주세요."); e.status = 400; return finish(e); }
       bb.on("file", (field, stream, info) => {
         if (field !== "file" || fileSeen) { stream.resume(); return; }
