@@ -291,6 +291,8 @@
   color: #4b5063;
 }
 .message-copy blockquote > * + * { margin-top: .6em; }
+/* The resets above would otherwise cancel the gap between blocks. */
+.message-copy > * + :is(ul, ol, blockquote) { margin-top: .8em; }
 .message-copy hr { height: 0; margin: 1.4em 0; border: 0; border-top: 1px solid var(--line); }
 .message-copy a {
   color: var(--accent-strong, #654296);
