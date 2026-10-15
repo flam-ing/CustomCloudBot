@@ -466,3 +466,25 @@ select option { background: #faf8ff; color: var(--text); }
   .setup-status { padding: 0 var(--space-5); }
 }
 
+/* --------------------------------------------------------- touch screens */
+@media (pointer: coarse) {
+  /* iOS zooms into any field under 16px; every field stays at 16px. */
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+  select, textarea { font-size: max(16px, 1rem) !important; }
+  /* Keyboard shortcut hints mean nothing without a keyboard. */
+  kbd { display: none; }
+  /* The model picker sits beside a 16px select; it moves one step closer. */
+  .model-controls .model-trigger { font-size: var(--fs-md); }
+
+  /* Fingers need 44px targets. */
+  .icon-button, .icon-btn, .btn-sm, .text-button, .notification-bell, .notification-mark-read,
+  .modal-head .modal-close, .routine-close, .setup-close, .room-sharing-header > button,
+  .archived-dialog header > button, .notification-close, .voice-call-top .voice-minimize,
+  .routine-actions .routine-button, .archived-dialog-row button {
+    min-width: var(--tap);
+    min-height: var(--tap);
+  }
+  .btn, .primary-button, .outline-button, .routine-button, .notification-setting-button,
+  .voice-call-controls button, .model-change-actions button, .sidebar-dialog-actions button,
+  .sidebar-dialog > button, .topic-choice-buttons button { min-height: var(--tap); }
+}
