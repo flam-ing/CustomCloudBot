@@ -1,5 +1,6 @@
 const MONITOR_ROOM = "00000000-0000-4000-8000-000000000001";
 import { renderMessageText } from "/message-format.mjs";
+import { renderTranscript, disposeTranscript } from "/transcript.mjs";
 import { recommendedModels, modelLabel, filterModels } from "/model-picker.mjs";
 import { createDesktopUI } from "/desktop.js";
 import { createPwaController } from "/pwa.js";
@@ -240,6 +241,8 @@ async function loadSession() {
 }
 $("#startup-retry").addEventListener("click", loadSession);
 function showAuth() {
+  disposeTranscript(els.messages);
+  $$(".extra-pane .message-list").forEach(disposeTranscript);
   closeComposerPicker();
   voiceUI?.reset();
   messageQueueUI?.reset();
@@ -279,7 +282,7 @@ function showAuth() {
   const paneGrid = $("#pane-grid");
   if (paneGrid) {
     paneGrid.dataset.panes = "1";
-    $$(".extra-pane", paneGrid).forEach((pane) => pane.remove());
+    $$(".extra-pane", paneGrid).forEach((pane) => { disposeTranscript(pane.querySelector(".message-list")); pane.remove(); });
   }
   $("#room-view").style.gridColumn = "";
   $("#room-view").classList.remove("is-focus");
@@ -603,7 +606,7 @@ function currentBranchId() {
   return state.focusPane > 0 ? state.extra[state.focusPane - 1]?.roomId : state.selectedRoom;
 }
 function branchBusy(id) {
-  return branchOperations.has(id) || modelChanges.has(id) || (state.selectedRoom === id && (state.sending || state.roomData?.busy)) || state.extra.some(pane => pane.roomId === id && (pane.sending || pane.data?.busy));
+  return pendingMessages.get(id)?.retrying || branchOperations.has(id) || modelChanges.has(id) || (state.selectedRoom === id && (state.sending || state.roomData?.busy)) || state.extra.some(pane => pane.roomId === id && (pane.sending || pane.data?.busy));
 }
 function updateBranchControls() {
   const id = currentBranchId(), room = state.rooms.find(item => item.id === id && !item.archived), available = room && id !== MONITOR_ROOM;
@@ -695,12 +698,13 @@ function openArchivedConversations() {
   dialog.addEventListener("close", () => { dialog.remove(); $("#profile-customize").focus(); }); document.body.append(dialog); dialog.showModal();
 }
 function showEmpty() {
+  disposeTranscript(els.messages);
   closeComposerPicker();
   clearPendingAttachments();
   state.selectedRoom = null;
   state.roomData = null;
   state.extra.forEach(pane => clearAttachmentDraft(pane)); state.extra = []; state.layout = 1; state.focusPane = 0;
-  $$(".extra-pane").forEach(pane => { pane._desktop?.destroy(); pane.remove(); });
+  $$(".extra-pane").forEach(pane => { disposeTranscript(pane.querySelector(".message-list")); pane._desktop?.destroy(); pane.remove(); });
   dockRects = [{x:0,y:0,w:1,h:1}]; $("#pane-grid").dataset.panes = "1"; applyDockLayout();
   desktopUI?.setRoom(null);
   stopPolling();
@@ -736,6 +740,7 @@ async function selectRoom(id) {
   cancelActiveRecording();
   clearPendingAttachments();
   desktopUI?.setRoom(id);
+  disposeTranscript(els.messages);
   els.messages.replaceChildren();
   els.memberList.replaceChildren();
   els.memberCount.textContent = "0";
@@ -792,6 +797,7 @@ function renderHostDashboard(snapshot) {
     }
     panel.append(storage,element("p",`최근 측정 ${new Date(snapshot.timestamp).toLocaleString('ko-KR')} · 자동 갱신`,"host-subtitle"));
   }
+  disposeTranscript(els.messages);
   els.messages.replaceChildren(panel);
 }
 async function refreshRoom(force = false) {
@@ -800,12 +806,6 @@ async function refreshRoom(force = false) {
   if (!roomId || (state.pollBusy && !force)) return;
   const request = ++state.roomRequest;
   state.pollBusy = true;
-  const nearBottom =
-    els.messages.scrollHeight -
-      els.messages.scrollTop -
-      els.messages.clientHeight <
-    90;
-  const scrollTop = els.messages.scrollTop;
   try {
     if (roomId === MONITOR_ROOM) {
       const snapshot = await api("/api/admin/monitor");
@@ -826,8 +826,6 @@ async function refreshRoom(force = false) {
     syncProgressStreams();
     if (!unchanged) {
       renderRoom(data);
-      if(nearBottom) els.messages.scrollTo({top:els.messages.scrollHeight,behavior:force?"instant":"smooth"});
-      else els.messages.scrollTop=scrollTop;
     }
   } catch (error) {
     if (request !== state.roomRequest) return;
@@ -897,39 +895,46 @@ async function optimisticMessage(roomId, text, nonce, attachments = []) {
   const user=state.session?.user;if(!user)return;
   const message={id:"pending:"+nonce,kind:"human",authorId:user.id,author:user.displayName || user.username,text,createdAt:Date.now(),attachments,pending:"sending"};
   pendingMessages.set(roomId,message);
-  paintPending(roomId);
+  paintPending(roomId, true);
   try {
     const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(user.id+":"+nonce));
     if(pendingMessages.get(roomId)===message)message.clientNonceHash=[...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,"0")).join("");
   } catch { /* POST messageId still reconciles the outbox if digest is unavailable. */ }
   return message;
 }
-function paintPending(roomId) {
-  if(state.selectedRoom===roomId && state.roomData){renderRoom(state.roomData);els.messages.scrollTop=els.messages.scrollHeight;}
-  state.extra.forEach((pane,index)=>{if(pane.roomId!==roomId)return;const list=$$(".extra-pane")[index]?.querySelector(".message-list");if(!list)return;list.replaceChildren(...mergePendingMessages(pane.data?.messages || [],pendingMessages.get(roomId)).map(message=>createMessage(message,pane,roomId)));list.scrollTop=list.scrollHeight;});
+function renderConversation(list, messages, { pane = null, roomId = state.selectedRoom, busy = false, forceBottom = false, emptyTitle = "", emptyNote = "메시지를 보내 대화를 시작하세요." } = {}) {
+  renderTranscript(list, messages, {
+    roomId, busy, forceBottom,
+    createMessage: (message, options) => createMessage(message, pane, roomId, options),
+    updateMessage: (node, message) => {
+      const avatar = node.querySelector(".avatar");
+      if (message.kind === "human" && avatar) renderUserAvatar(avatar, messageProfile(message), message.author);
+    },
+    createThinking: () => thinkingRow(roomId),
+    empty: () => {
+      const node = document.createElement("div"); node.className = "message-empty";
+      if (emptyTitle) { const title = document.createElement("strong"); title.textContent = emptyTitle; node.append(title); }
+      const note = document.createElement("span"); note.textContent = emptyNote; node.append(note);
+      return node;
+    },
+  });
 }
-function renderRoom(data) {
+function paintPending(roomId, forceBottom = false) {
+  if (state.selectedRoom === roomId && state.roomData) renderRoom(state.roomData, forceBottom);
+  state.extra.forEach((pane, index) => {
+    if (pane.roomId !== roomId) return;
+    const list = $$(".extra-pane")[index]?.querySelector(".message-list");
+    if (list) renderConversation(list, mergePendingMessages(pane.data?.messages || [], pendingMessages.get(roomId)), { pane, roomId, busy: !!pane.data?.busy, forceBottom });
+  });
+}
+function renderRoom(data, forceBottom = false) {
   if(data.room) {const room=state.rooms.find(r=>r.id===data.room.id);if(room&&room.name!==data.room.name){room.name=data.room.name;els.roomTitle.textContent=room.name;renderRooms();}}
   renderContextMeter(data.context);
   messageQueueUI?.render($("#composer-form"), data.room.id, data.queue);
-  const previousNodes=new Map([...els.messages.children].filter(el=>el.dataset.messageId).map(el=>[el.dataset.messageId,el]));
-  els.messages.replaceChildren();
-  const messages = mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id));
-  if (!messages.length) {
-    const empty = document.createElement("div");
-    empty.className = "message-empty";
-    const title = document.createElement("strong");
-    title.textContent = "아직 메시지가 없습니다.";
-    const note = document.createElement("span");
-    note.textContent = "메시지를 보내 대화를 시작하세요.";
-    empty.append(title, note);
-    els.messages.append(empty);
-  } else
-    messages.forEach(message=>{
-      const node=(!message.pending && !previousNodes.get(message.id)?.dataset.pending ? previousNodes.get(message.id) : null) || createMessage(message,null,data.room.id);
-      if(message.kind==="human")renderUserAvatar($(".avatar",node),messageProfile(message),message.author);
-      els.messages.append(node);
-    });
+  renderConversation(els.messages, mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id)), {
+    roomId: data.room.id, busy: !!data.busy, forceBottom,
+    emptyTitle: "아직 메시지가 없습니다.",
+  });
   const members = data.members || [];
   els.memberCount.textContent = members.length;
   els.memberList.replaceChildren();
@@ -956,7 +961,6 @@ function renderRoom(data) {
   });
   els.roomView.classList.toggle("agent-working",!!data.busy);
   if (data.busy) {
-    els.messages.append(thinkingRow());
     clearThinking(els.sendingStatus);
   } else if (!state.sending) {
     clearThinking(els.sendingStatus);
@@ -1111,14 +1115,15 @@ function thinkingRow(roomId = state.selectedRoom) {
   return article;
 }
 const animatedMessages = new Set();
-function createMessage(message, pane = null, roomId = state.selectedRoom) {
+function createMessage(message, pane = null, roomId = state.selectedRoom, { animate = true } = {}) {
   const article = document.createElement("article");
   if(message.id)article.dataset.messageId=message.id;
   if(message.pending)article.dataset.pending=message.pending;
   const own =
     message.kind === "human" && message.authorId === state.session?.user?.id;
   article.className = `message message-${message.kind}${own ? " message-own" : ""}`;
-  if(message.id && Date.now()-message.createdAt<15000 && !animatedMessages.has(message.id)){article.classList.add("message-enter");animatedMessages.add(message.id);if(animatedMessages.size>500)animatedMessages.delete(animatedMessages.values().next().value);}
+  if(animate && message.id && Date.now()-message.createdAt<15000 && !animatedMessages.has(message.id)){article.classList.add("message-enter");animatedMessages.add(message.id);if(animatedMessages.size>500)animatedMessages.delete(animatedMessages.values().next().value);}
+  article.addEventListener("animationend", event => { if (event.target === article) article.classList.remove("message-enter"); });
   const avatar = document.createElement("div");
   avatar.className = `avatar ${message.kind === "bot" ? "avatar-bot" : ""}`;
   if (message.kind !== "bot") renderUserAvatar(avatar,messageProfile(message),message.author);
@@ -1152,6 +1157,13 @@ function createMessage(message, pane = null, roomId = state.selectedRoom) {
         image.src = attachment.url;
         image.alt = attachment.name || "첨부 이미지";
         image.loading = "lazy";
+        image.decoding = "async";
+        if (attachment.width > 0 && attachment.height > 0) {
+          image.width = attachment.width; image.height = attachment.height;
+          image.style.width = `min(${Math.min(220, attachment.width, 220 * attachment.width / attachment.height)}px, 55vw)`;
+          image.style.height = "auto";
+          image.style.objectFit = "contain";
+        }
         image.addEventListener("click", () => {
           $("#image-dialog-image").src = attachment.url;
           $("#image-dialog-image").alt = attachment.name || "첨부 이미지";
@@ -1178,9 +1190,56 @@ function createMessage(message, pane = null, roomId = state.selectedRoom) {
     fork.onclick = () => sessionAction("fork", pane, fork, message.id, roomId);
     actions.append(copy, fork); body.append(actions);
   }
-  if (message.pending === "failed") { const note=document.createElement("p");note.className="message-send-error";note.textContent="전송을 확인하지 못했어요. 입력창에서 다시 시도해 주세요.";body.append(note); }
+  if (message.pending === "failed") {
+    const failure = document.createElement("div"); failure.className = "message-send-error";
+    const note = document.createElement("span"); note.textContent = "전송을 확인하지 못했어요.";
+    const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "다시 보내기";
+    retry.onclick = () => retryPendingMessage(message);
+    const discard = document.createElement("button"); discard.type = "button"; discard.textContent = "삭제";
+    discard.setAttribute("aria-label", "보내지 못한 메시지 삭제");
+    discard.onclick = () => discardPendingMessage(message, roomId);
+    failure.append(note, retry, discard); body.append(failure);
+  }
   article.append(body);
   return article;
+}
+async function retryPendingMessage(message) {
+  const request = message.retry;
+  if (!request || message.pending !== "failed" || message.retrying ||
+      state.session?.user?.id !== request.userId || pendingMessages.get(request.roomId) !== message) return;
+  const { roomId, userId, payload } = request;
+  const retrySession = state.session;
+  const sameSession = () => state.session?.user?.id === retrySession?.user?.id && state.session?.csrfToken === retrySession?.csrfToken;
+  const current = () => sameSession() && pendingMessages.get(roomId) === message;
+  message.retrying = true; message.pending = "sending";
+  presenceErrors.delete(roomId);
+  paintPending(roomId); updateModelAvailability();
+  let accepted = false;
+  try {
+    const result = await api(`/api/rooms/${encodeURIComponent(roomId)}/messages`, { method: "POST", body: payload, retryable: true });
+    accepted = true;
+    if (!current()) return;
+    const nonce = JSON.parse(payload).clientNonce;
+    if (state.pendingSend?.nonce === nonce) state.pendingSend = null;
+    for (const pane of state.extra) if (pane.pendingSend?.nonce === nonce) pane.pendingSend = null;
+    if (result.messageId) message.id = result.messageId;
+    if (result.queued) pendingMessages.delete(roomId);
+    if (Array.isArray(result.models)) applyModels(result.models);
+    if (state.selectedRoom === roomId) await refreshRoom(true);
+    await Promise.all(state.extra.map((pane, index) => pane.roomId === roomId ? refreshExtra(index) : null));
+    await loadRooms();
+  } catch (error) {
+    if (!current()) return;
+    if (accepted) { toast("메시지는 접수됐습니다. 대화를 다시 불러오고 있어요."); return; }
+    message.pending = "failed"; presenceErrors.add(roomId); toast(error.message);
+  } finally {
+    message.retrying = false;
+    if (sameSession() && (current() || accepted)) { paintPending(roomId); updateModelAvailability(); }
+  }
+}
+function discardPendingMessage(message, roomId) {
+  if (message.retrying || message.pending !== "failed" || pendingMessages.get(roomId) !== message) return;
+  pendingMessages.delete(roomId); paintPending(roomId);
 }
 function renderBotPicker() {
   const picker = $("#bot-picker");
@@ -1445,12 +1504,15 @@ async function offerTopicChoice(pane,draft) {
 async function submitMessage(event, skipTopic = false) {
   event.preventDefault();
   if (composerBlocked()) return;
+  const sendSession = state.session;
+  const sendCurrent = () => state.session?.user?.id === sendSession?.user?.id && state.session?.csrfToken === sendSession?.csrfToken;
   const input = $("#message-input"),
     text = input.value.trim();
   const attachments = state.pendingAttachments.filter((item) => item.attachment && !item.error);
   const attachmentGeneration = state.attachmentGeneration;
   const roomId = state.selectedRoom,
     botIds = [...state.selectedBots];
+  if (pendingMessages.get(roomId)?.pending === "failed") { toast("보내지 못한 메시지를 다시 보내거나 삭제한 뒤 전송해 주세요."); return; }
   if (state.pendingAttachments.some((item) => item.uploading)) {
     toast("첨부 파일 업로드가 끝날 때까지 기다려주세요.");
     return;
@@ -1459,7 +1521,7 @@ async function submitMessage(event, skipTopic = false) {
   if (!text && !attachments.length) return;
   if(topicPrompts.has(roomId))return;
   if(!skipTopic && !attachments.length && await offerTopicChoice(null,text))return;
-  if(state.selectedRoom!==roomId || composerBlocked())return;
+  if(!sendCurrent() || state.selectedRoom!==roomId || composerBlocked())return;
   const attachmentIds = attachments.map((item) => item.attachment.id);
   const model = $("#model-select").value, effort = $("#effort-select").value;
   const signature = JSON.stringify({ roomId, text, botIds, attachmentIds, model, effort });
@@ -1482,15 +1544,17 @@ async function submitMessage(event, skipTopic = false) {
   input.disabled = true;
   input.value=""; input.style.height="";
   const pending = state.roomData?.busy ? null : await optimisticMessage(roomId,text,state.pendingSend.nonce,attachments.map(item=>item.attachment));
+  if (pending) pending.retry = Object.freeze({ roomId, userId: sendUserId, payload });
   let accepted=false;
   try {
+    if (!sendCurrent()) return;
     const result = await api(`/api/rooms/${encodeURIComponent(roomId)}/messages`, {
       method: "POST",
       body: payload,
       retryable: true,
     });
     accepted=true;
-    if(state.session?.user?.id!==sendUserId)return;
+    if(!sendCurrent())return;
     if(result.queued && pendingMessages.get(roomId)===pending)pendingMessages.delete(roomId);
     if(result.messageId && pending)pending.id=result.messageId;
     if(result.queued)paintPending(roomId);
@@ -1500,14 +1564,17 @@ async function submitMessage(event, skipTopic = false) {
     await refreshRoom(true);
     await loadRooms();
   } catch (error) {
-    if(state.session?.user?.id!==sendUserId)return;
+    if(!sendCurrent())return;
     if(accepted){toast("메시지는 접수됐습니다. 대화를 다시 불러오고 있어요.");return;}
     presenceErrors.add(roomId);
-    if(pending)pending.pending="failed";
-    if(state.selectedRoom===roomId && !input.value)input.value=text;
+    if (pending) {
+      pending.pending = "failed";
+      state.pendingSend = null;
+      if (state.selectedRoom === roomId && state.attachmentGeneration === attachmentGeneration) clearPendingAttachments();
+    } else if (state.selectedRoom === roomId && !input.value) input.value = text;
     paintPending(roomId);toast(error.message);
   } finally {
-    if(state.session?.user?.id!==sendUserId)return;
+    if(!sendCurrent())return;
     state.sending = false;
     $("#send-button").disabled = false;
     input.disabled = false;
@@ -1592,7 +1659,7 @@ async function openCapabilityHub() {
 const modelChanges = new Map();
 function roomContextOwner(pane = null) {
   const roomId=pane?pane.roomId:state.selectedRoom,data=pane?pane.data:state.roomData;
-  const working=!!(data?.busy||(pane?pane.sending:state.sending));
+  const working=!!(data?.busy||(pane?pane.sending:state.sending)||pendingMessages.get(roomId)?.retrying);
   const role=data?.room?.role || state.rooms?.find(room=>room.id===roomId)?.role;
   return {roomId,data,working,busy:working||modelChanges.has(roomId)||branchOperations.has(roomId),canManage:role==="owner"};
 }
@@ -1878,7 +1945,7 @@ function saveRoomPreferences(id, prefs) {
 }
 function composerBlocked(pane = null) {
   const {roomId} = roomContextOwner(pane);
-  return !roomId || roomId === MONITOR_ROOM || (pane ? pane.sending : state.sending) || modelChanges.has(roomId) || branchOperations.has(roomId);
+  return !roomId || roomId === MONITOR_ROOM || (pane ? pane.sending : state.sending) || pendingMessages.get(roomId)?.retrying || modelChanges.has(roomId) || branchOperations.has(roomId);
 }
 function updateModelAvailability() {
   updateBranchControls();
@@ -2083,7 +2150,7 @@ function setLayout(count) {
     $("#pane-grid").classList.remove("docked");
     $("#room-view").style.gridColumn = "";
     $("#room-view").classList.remove("is-focus");
-    $$(".extra-pane").forEach((pane) => pane.remove());
+    $$(".extra-pane").forEach((pane) => { disposeTranscript(pane.querySelector(".message-list")); pane.remove(); });
     dockRects = [{x:0,y:0,w:1,h:1}]; applyDockLayout();
     $$(".split-picker button").forEach((button) => {
       button.classList.remove("is-on");
@@ -2119,7 +2186,7 @@ function renderExtraPanes() {
   syncProgressStreams();
   const grid = $("#pane-grid");
   const spans = { 5: [2, 2, 2, 3, 3], 7: [3, 3, 3, 3, 4, 4, 4] }[state.layout];
-  $$(".extra-pane", grid).forEach((pane) => {pane._desktop?.destroy();pane.remove();});
+  $$(".extra-pane", grid).forEach((pane) => {disposeTranscript(pane.querySelector(".message-list"));pane._desktop?.destroy();pane.remove();});
   $("#room-view").style.gridColumn = spans ? "span " + spans[0] : "";
   state.extra.forEach((pane, index) => {
     Object.assign(pane, roomPreferences(pane.roomId));
@@ -2163,18 +2230,7 @@ function renderExtraPanes() {
 
     const list = document.createElement("div");
     list.className = "message-list";
-    const messages = mergePendingMessages(pane.data?.messages || [],pendingMessages.get(pane.roomId));
-    if (messages.length) messages.forEach((message) => list.append(createMessage(message,pane,pane.roomId)));
-    else {
-      const empty = document.createElement("div");
-      empty.className = "message-empty";
-      const note = document.createElement("span");
-      note.textContent = pane.roomId ? "메시지를 불러오는 중…" : "이 칸을 누른 뒤 왼쪽 대화를 고르세요.";
-      empty.append(note);
-      list.append(empty);
-    }
     section.classList.toggle("agent-working", !!pane.data?.busy);
-    if (pane.data?.busy && pane.data.room?.id === pane.roomId) list.append(thinkingRow(pane.roomId));
     const form = document.createElement("form");
     form.className = "composer pane-composer";
     form.addEventListener("submit", (event) => submitPane(event, index));
@@ -2221,6 +2277,10 @@ function renderExtraPanes() {
     messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
     grid.append(section);
+    renderConversation(list, mergePendingMessages(pane.data?.messages || [], pendingMessages.get(pane.roomId)), {
+      pane, roomId: pane.roomId, busy: !!pane.data?.busy && pane.data.room?.id === pane.roomId,
+      emptyNote: pane.roomId ? "메시지를 불러오는 중…" : "이 칸을 누른 뒤 왼쪽 대화를 고르세요.",
+    });
     renderPendingAttachments(pane);
 
   });
@@ -2261,9 +2321,12 @@ async function submitPane(event, index, skipTopic = false) {
   event.preventDefault();
   const pane = state.extra[index];
   if (!pane || composerBlocked(pane)) return;
+  const sendSession = state.session;
+  const sendCurrent = () => state.session?.user?.id === sendSession?.user?.id && state.session?.csrfToken === sendSession?.csrfToken;
   const form = event.currentTarget;
   const input = $("textarea", form);
   const text = input.value.trim();
+  if (pendingMessages.get(pane.roomId)?.pending === "failed") { toast("보내지 못한 메시지를 다시 보내거나 삭제한 뒤 전송해 주세요."); return; }
   const attachments = (pane.pendingAttachments || []).filter(item => item.attachment && !item.error);
   if ((pane.pendingAttachments || []).some(item => item.uploading)) { toast("첨부 파일 업로드가 끝날 때까지 기다려주세요."); return; }
   if ((pane.pendingAttachments || []).some(item => item.error)) { toast("업로드하지 못한 첨부 파일을 제거한 뒤 다시 첨부해 주세요."); return; }
@@ -2272,26 +2335,29 @@ async function submitPane(event, index, skipTopic = false) {
   const roomId=pane.roomId,userId=state.session?.user?.id;
   if(topicPrompts.has(roomId))return;
   if(!skipTopic && !attachments.length && await offerTopicChoice(pane,text))return;
-  if(!contextOwnerCurrent(roomId,userId,pane)||composerBlocked(pane))return;
+  if(!sendCurrent() || !contextOwnerCurrent(roomId,userId,pane)||composerBlocked(pane))return;
   const attachmentIds = attachments.map(item => item.attachment.id);
-  const signature=JSON.stringify({roomId,text,attachmentIds,model:pane.model,effort:pane.effort});
+  const model = $(".model-select", form).value, effort = $(".effort-select", form).value, botIds = [...state.selectedBots];
+  const signature=JSON.stringify({roomId,text,attachmentIds,model,effort,botIds});
   if(pane.pendingSend?.signature!==signature)pane.pendingSend={signature,nonce:crypto.randomUUID()};
   const nonce=pane.pendingSend.nonce;
-  const payload=JSON.stringify({text,botIds:[...state.selectedBots],attachmentIds,clientNonce:nonce,model:$(".model-select",form).value,effort:$(".effort-select",form).value,queueIfBusy:true});
+  const payload=JSON.stringify({text,botIds,attachmentIds,clientNonce:nonce,model,effort,queueIfBusy:true});
   presenceErrors.delete(roomId);
   pane.sending = true;
   updateModelAvailability();
   input.value=""; pane.draft="";input.disabled=true;
   const pending=pane.data?.busy ? null : await optimisticMessage(roomId,text,nonce,attachments.map(item => item.attachment));
+  if (pending) pending.retry = Object.freeze({ roomId, userId, payload });
   let accepted=false;
   try {
+    if (!sendCurrent()) return;
     const result = await api(`/api/rooms/${encodeURIComponent(roomId)}/messages`, {
       method: "POST",
       body: payload,
       retryable: true,
     });
     accepted=true;
-    if(state.session?.user?.id!==userId)return;
+    if(!sendCurrent())return;
     if(result.queued && pendingMessages.get(roomId)===pending)pendingMessages.delete(roomId);
     if(result.messageId&&pending)pending.id=result.messageId;
     if(result.queued)paintPending(roomId);
@@ -2301,13 +2367,17 @@ async function submitPane(event, index, skipTopic = false) {
     if(contextOwnerCurrent(roomId,userId,pane))await refreshExtra(state.extra.indexOf(pane));
     await loadRooms();
   } catch (error) {
-    if(state.session?.user?.id!==userId)return;
+    if(!sendCurrent())return;
     if(accepted){toast("메시지는 접수됐습니다. 대화를 다시 불러오고 있어요.");return;}
-    presenceErrors.add(roomId);if(pending)pending.pending="failed";
-    if(pane.roomId===roomId){input.value=text;pane.draft=text;}
+    presenceErrors.add(roomId);
+    if (pending) {
+      pending.pending = "failed";
+      pane.pendingSend = null;
+      if (contextOwnerCurrent(roomId, userId, pane) && pane.attachmentGeneration === attachmentGeneration) clearPendingAttachments(pane);
+    } else if (pane.roomId === roomId) { input.value = text; pane.draft = text; }
     paintPending(roomId);toast(error.message);
   } finally {
-    if(state.session?.user?.id!==userId)return;
+    if(!sendCurrent())return;
     input.disabled=false;
     pane.sending = false;
     updateModelAvailability();
@@ -2333,21 +2403,8 @@ async function refreshExtra(index) {
     renderContextMeter(data.context,$(".pane-composer",section),pane);
     messageQueueUI?.render($(".pane-composer",section), roomId, data.queue);
     const list = $(".message-list", section);
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 90;
-    list.replaceChildren();
-    const messages = mergePendingMessages(data.messages || [],pendingMessages.get(roomId));
-    if (messages.length) messages.forEach((message) => list.append(createMessage(message,pane,roomId)));
-    else {
-      const empty = document.createElement("div");
-      empty.className = "message-empty";
-      const note = document.createElement("span");
-      note.textContent = "메시지를 보내 대화를 시작하세요.";
-      empty.append(note);
-      list.append(empty);
-    }
+    renderConversation(list, mergePendingMessages(data.messages || [], pendingMessages.get(roomId)), { pane, roomId, busy: !!data.busy });
     section.classList.toggle("agent-working", !!data.busy);
-    if (data.busy) list.append(thinkingRow(roomId));
-    if (nearBottom) list.scrollTop = list.scrollHeight;
     $("h2", section).textContent = data.room?.name || "대화";
     const listed=state.rooms.find(room=>room.id===roomId);
     if(listed&&data.room?.name&&listed.name!==data.room.name){listed.name=data.room.name;renderRooms();}

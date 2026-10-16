@@ -1654,3 +1654,19 @@ button:active .agent-art { transform:scale(.94); }
   .sidebar-header .icon-button,.sidebar-header .notification-bell { width:40px; height:40px; }
   .main-panel:not(.is-split) > .topbar > .topbar-actions .icon-button { width:40px; height:40px; }
 }
+
+/* Rich reply content; the existing glass shell and composer placement stay unchanged. */
+.message-copy ul, .message-copy ol { margin: 10px 0; padding-inline-start: 1.5em; }
+.message-copy li { margin: 4px 0; }
+.message-copy li > .rich-paragraph { margin: 6px 0; }
+.message-copy blockquote { margin: 12px 0; padding: 2px 0 2px 14px; border-inline-start: 3px solid var(--muted); color: var(--text); }
+.message-copy hr { margin: 16px 0; border: 0; border-top: 1px solid var(--line); }
+.message-copy .rich-task { list-style: none; }
+.message-copy .rich-task input { width: 14px; height: 14px; margin-inline: -1.2em .45em; vertical-align: middle; accent-color: var(--brand-indigo); }
+.rich-table { max-width: 100%; overflow-x: auto; margin: 12px 0; scrollbar-width: thin; }
+.rich-table table { width: 100%; border-collapse: collapse; font-size: inherit; }
+.rich-table th, .rich-table td { padding: 8px 12px; border: 1px solid var(--line); text-align: start; vertical-align: top; }
+.rich-table th { font-weight: 600; background: var(--hover); }
+.message-send-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.message-send-error button { padding: 5px 9px; border: 1px solid currentColor; border-radius: 8px; color: inherit; background: transparent; font: inherit; }
+.message-send-error button:hover { background: var(--hover); }
