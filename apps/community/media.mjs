@@ -26,6 +26,105 @@ const signature = (buf, mime) => {
   return false;
 };
 
+// EXIF orientations 5-8 turn the picture a quarter turn when the browser draws it.
+function jpegOrientation(buf, start, end) {
+  if (start + 14 > end || buf.toString("latin1", start, start + 6) !== "Exif\0\0") return 1;
+  const tiff = start + 6;
+  const order = buf.toString("latin1", tiff, tiff + 2);
+  if (!["II", "MM"].includes(order)) return 1;
+  const little = order === "II";
+  const u16 = (at) => at + 2 <= end ? (little ? buf.readUInt16LE(at) : buf.readUInt16BE(at)) : 0;
+  const u32 = (at) => at + 4 <= end ? (little ? buf.readUInt32LE(at) : buf.readUInt32BE(at)) : 0;
+  if (u16(tiff + 2) !== 42) return 1;
+  const offset = u32(tiff + 4);
+  if (offset < 8) return 1;
+  const ifd = tiff + offset;
+  const count = u16(ifd);
+  for (let i = 0; i < count && i < 256; i++) {
+    const entry = ifd + 2 + i * 12;
+    if (entry + 12 > end) break;
+    if (u16(entry) === 0x0112 && u16(entry + 2) === 3 && u32(entry + 4) === 1) {
+      const orientation = u16(entry + 8);
+      return orientation >= 1 && orientation <= 8 ? orientation : 1;
+    }
+  }
+  return 1;
+}
+
+/** Pixel size of a PNG, GIF, WebP or JPEG header, as the browser will show it. */
+export function imageDimensions(buf, mime) {
+  if (!Buffer.isBuffer(buf) || !signature(buf, mime)) return null;
+  const valid = (width, height) => Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 && width <= 65535 && height <= 65535 ? { width, height } : null;
+  try {
+    if (mime === "image/png" && buf.length >= 24 && buf.toString("latin1", 12, 16) === "IHDR") return valid(buf.readUInt32BE(16), buf.readUInt32BE(20));
+    if (mime === "image/gif" && buf.length >= 10) return valid(buf.readUInt16LE(6), buf.readUInt16LE(8));
+    if (mime === "image/webp" && buf.length >= 25) {
+      const chunk = buf.toString("latin1", 12, 16);
+      if (chunk === "VP8 " && buf.length >= 30) return valid(buf.readUInt16LE(26) & 0x3fff, buf.readUInt16LE(28) & 0x3fff);
+      if (chunk === "VP8L") { const b = buf.subarray(21, 25); return valid(1 + (((b[1] & 0x3f) << 8) | b[0]), 1 + (((b[3] & 0x0f) << 10) | (b[2] << 2) | ((b[1] & 0xc0) >> 6))); }
+      if (chunk === "VP8X" && buf.length >= 30) return valid(1 + buf.readUIntLE(24, 3), 1 + buf.readUIntLE(27, 3));
+      return null;
+    }
+    if (mime === "image/jpeg" && buf[0] === 0xff && buf[1] === 0xd8) {
+      let at = 2, orientation = 1;
+      while (at + 4 <= buf.length) {
+        if (buf[at] !== 0xff) return null;
+        const marker = buf[at + 1];
+        if (marker === 0xff) { at++; continue; }
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { at += 2; continue; }
+        if (marker === 0xd9 || marker === 0xda) return null;
+        const length = buf.readUInt16BE(at + 2);
+        if (length < 2 || at + 2 + length > buf.length) return null;
+        if (marker === 0xe1) orientation = jpegOrientation(buf, at + 4, at + 2 + length);
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          if (length < 8) return null;
+          const height = buf.readUInt16BE(at + 5), width = buf.readUInt16BE(at + 7);
+          return orientation >= 5 && orientation <= 8 ? valid(height, width) : valid(width, height);
+        }
+        at += 2 + length;
+      }
+    }
+  } catch { return null; }
+  return null;
+}
+
+/** Bound header I/O across all requests, coalescing files shared by forked rooms. */
+export function createImageDimensionReader({openFile=open}={}) {
+  const cache=new Map(),pending=new Map(),waiting=[];
+  let active=0;
+  async function read(path,mime){
+    let file;
+    try {
+      file=await openFile(path,"r");
+      const head=Buffer.alloc(mime==="image/jpeg"?512*1024:64);
+      const {bytesRead}=await file.read(head,0,head.length,0);
+      return imageDimensions(head.subarray(0,bytesRead),mime);
+    }catch{return null;}
+    finally{if(file)await file.close().catch(()=>{});}
+  }
+  return function storedDimensions(path,mime){
+    if(!IMAGE_TYPES.has(mime))return Promise.resolve(null);
+    if(cache.has(path))return Promise.resolve(cache.get(path));
+    if(pending.has(path))return pending.get(path);
+    const result=new Promise(resolve=>{
+      const run=async()=>{
+        active++;
+        try{resolve(await read(path,mime));}
+        finally{active--;waiting.shift()?.();}
+      };
+      if(active<8)void run();else waiting.push(run);
+    }).then(value=>{
+      pending.delete(path);
+      if(cache.size>=2000)cache.delete(cache.keys().next().value);
+      cache.set(path,value);
+      return value;
+    });
+    pending.set(path,result);
+    return result;
+  };
+}
+export const storedImageDimensions=createImageDimensionReader();
+
 export async function prepareMediaDir(dataDir) {
   const dir = join(dataDir, "media");
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -91,7 +190,7 @@ export async function receiveAttachment(req, { mediaDir, maxBytes = MAX_DEFAULT,
       let settled = false;
       const finish = (err, value) => { if (settled) return; settled = true; err ? reject(err) : resolve(value); };
       let bb;
-      try { bb = Busboy({ headers: req.headers, limits: { files: 1, fields: 2, parts: 3, fileSize: maxBytes } }); busboy = bb; }
+      try { bb = Busboy({ headers: req.headers, defParamCharset: "utf8", limits: { files: 1, fields: 2, parts: 3, fileSize: maxBytes } }); busboy = bb; }
       catch { const e = new Error("multipart 요청 형식을 확인해 주세요."); e.status = 400; return finish(e); }
       bb.on("file", (field, stream, info) => {
         if (field !== "file" || fileSeen) { stream.resume(); return; }

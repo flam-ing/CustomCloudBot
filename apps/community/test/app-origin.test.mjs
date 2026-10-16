@@ -51,6 +51,18 @@ test('host-specific app support does not relax cross-site API or subresource pro
   }
 });
 
+test('chat rendering modules are served as JavaScript on both web and installed-app hosts',async t=>{
+  const app=await fixture(t);
+  for(const host of ['bots.example.test','192.0.2.10']){
+    for(const [path,exportName] of [['/transcript.mjs','renderTranscript'],['/message-format.mjs','renderMessageText']]){
+      const module=await request(app,{host,path,headers:{'sec-fetch-site':'same-origin','sec-fetch-mode':'cors','sec-fetch-dest':'script'}});
+      assert.equal(module.status,200,path);
+      assert.match(module.headers['content-type'],/^text\/javascript\b/);
+      assert.match(module.text,new RegExp(`export function ${exportName}\\(`));
+    }
+  }
+});
+
 test('browser and app authentication cookies remain secure and host-only',async t=>{
   const app=await fixture(t),body={username:'origin_fixture_user',displayName:'Fixture',password:'fixture-long-password',inviteToken:'origin-fixture'};
   const registration=await request(app,{host:'bots.example.test',origin:canonical,path:'/api/register',method:'POST',body});assert.equal(registration.status,201);

@@ -32,7 +32,7 @@ import { EFFORTS, createProviderPool, formatModelList, publicModels } from "./pr
 import { createOpenClawFromEnv } from "./lib/backend/openclaw-http.mjs";
 import { parseDesktops, createDesktopHub } from "./desktop.mjs";
 import { BROWSER_TOOL_DEFINITIONS, createBrowserTools } from "./browser-tools.mjs";
-import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, createUploadLimiter, MAX_DEFAULT } from "./media.mjs";
+import { prepareMediaDir, cleanupOrphans, receiveAttachment, finalizeAttachment, createUploadLimiter, MAX_DEFAULT, storedImageDimensions } from "./media.mjs";
 import { createVoiceTranscriber, VOICE_MAX_BYTES } from "./voice.mjs";
 import { createMessageQueue } from "./message-queue.mjs";
 import { AVATAR_MAX_BYTES, AVATAR_MIMES, validateAvatarBytes } from "./avatar-media.mjs";
@@ -127,6 +127,7 @@ function initialize(db) {
 }
 
 export async function startCommunity(options = {}) {
+  const readImageDimensions=options.readImageDimensions || storedImageDimensions;
   const env = options.env ?? process.env;
   const host = options.host ?? env.COMMUNITY_HOST ?? "127.0.0.1";
   const origin = options.origin ?? env.COMMUNITY_ORIGIN ?? "";
@@ -1045,6 +1046,7 @@ export async function startCommunity(options = {}) {
           "/integrations.css": ["integrations.css", "text/css"],
           "/": ["index.html", "text/html"],
           "/message-format.mjs": ["message-format.mjs", "text/javascript"],
+          "/transcript.mjs": ["transcript.mjs", "text/javascript"],
           "/model-picker.mjs": ["model-picker.mjs", "text/javascript"],
           "/app.js": ["app.js", "text/javascript"],
           "/conversation-ui.mjs": ["conversation-ui.mjs", "text/javascript"],
@@ -1231,20 +1233,21 @@ export async function startCommunity(options = {}) {
           if (!current || current.sessionHash !== user.sessionHash) throw failure(403,"다시 로그인한 뒤 전화해 주세요.");
           roomFor(room.id,current);
         };
-        let upload;
+        let upload, result;
         try {
           upload = await receiveAttachment(req,{mediaDir,maxBytes:VOICE_MAX_BYTES,userId:user.id});
           if (upload.kind !== "audio") throw failure(415,"음성 파일을 보내 주세요.");
           currentMember();
-          const result = await voice.transcribe({bytes:await readFile(upload.tempPath),mime:upload.declaredMime,signal:controller.signal});
-          currentMember();
-          return reply(res,200,result);
+          result = await voice.transcribe({bytes:await readFile(upload.tempPath),mime:upload.declaredMime,signal:controller.signal});
         } finally {
           if (upload) await unlink(upload.tempPath).catch(()=>{});
           res.removeListener("close",cancel);
           controllers.delete(controller);
           release();
         }
+        // Finish temporary-file cleanup before acknowledging the transcription.
+        currentMember();
+        return reply(res,200,result);
       }
       if (authenticating) {
         const username = text(body.username, 40, true).toLowerCase();
@@ -1501,6 +1504,10 @@ export async function startCommunity(options = {}) {
         const attachmentId = randomUUID();
         try {
           await finalizeAttachment(upload, mediaDir, attachmentId);
+          const dimensions=upload.kind === "image" ? await readImageDimensions(join(mediaDir,attachmentId),upload.declaredMime) : null;
+          const current=userFor(req);
+          if(!current||current.sessionHash!==user.sessionHash)throw failure(401,"로그인이 필요합니다.");
+          roomFor(room.id,current);
           attachment = transaction(() => {
             const used = db.prepare("SELECT bytes FROM media_usage WHERE user_id=? AND day=?").get(user.id, day())?.bytes ?? 0;
             const total = db.prepare("SELECT coalesce(sum(size),0) bytes FROM attachments").get().bytes;
@@ -1509,7 +1516,7 @@ export async function startCommunity(options = {}) {
             const path = join(mediaDir, attachmentId);
             db.prepare("INSERT INTO attachments VALUES(?,?,?,?,?,?,?,?,?,NULL)").run(attachmentId, room.id, user.id, upload.fileName, upload.declaredMime === "audio/x-wav" ? "audio/wav" : upload.declaredMime, upload.kind, upload.size, path, Date.now());
             db.prepare("INSERT INTO media_usage VALUES(?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET bytes=bytes+excluded.bytes").run(user.id, day(), upload.size);
-            return { id: attachmentId, kind: upload.kind, name: upload.fileName, mime: upload.declaredMime === "audio/x-wav" ? "audio/wav" : upload.declaredMime, size: upload.size, url: `/api/rooms/${room.id}/attachments/${attachmentId}` };
+            return { id: attachmentId, kind: upload.kind, name: upload.fileName, mime: upload.declaredMime === "audio/x-wav" ? "audio/wav" : upload.declaredMime, size: upload.size, url: `/api/rooms/${room.id}/attachments/${attachmentId}`, ...dimensions };
           });
         } catch (e) {
           await unlink(upload.tempPath).catch(() => {});
@@ -1928,13 +1935,23 @@ export async function startCommunity(options = {}) {
               "SELECT id,kind,author_id authorId,author,text,client_nonce clientNonceHash,created_at createdAt FROM messages WHERE room_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100",
             )
             .all(room.id).reverse();
+        const dimensionReads=[];
         for (const message of messages) {
           if (message.kind !== "human" || message.authorId !== user.id || !message.clientNonceHash) delete message.clientNonceHash;
           if (message.kind === "human" && message.authorId) Object.assign(message, avatarShape(message.authorId));
-          message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id);
+          // Reserve image space before decoding; stored paths never leave the server.
+          message.attachments = db.prepare("SELECT a.id,a.kind,a.name,a.mime,a.size,a.path,('/api/rooms/'||a.room_id||'/attachments/'||a.id) url FROM attachments a JOIN message_attachments ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY a.created_at").all(message.id)
+            .map(({ path, ...attachment }) => {
+              if(attachment.kind === "image")dimensionReads.push(readImageDimensions(path,attachment.mime).then(dimensions=>Object.assign(attachment,dimensions)));
+              return attachment;
+            });
         }
+        if(dimensionReads.length)await Promise.all(dimensionReads);
+        const current=userFor(req);
+        if(!current||current.sessionHash!==user.sessionHash)throw failure(401,"로그인이 필요합니다.");
+        const refreshedRoom=roomFor(room.id,current);
         return reply(res, 200, {
-          room: roomView(room),
+          room: roomView(refreshedRoom),
           members: db
             .prepare(
               "SELECT u.id,u.display_name displayName,m.role FROM room_members m JOIN users u ON m.user_id=u.id WHERE m.room_id=?",
@@ -1942,7 +1959,7 @@ export async function startCommunity(options = {}) {
             .all(room.id).map(member => ({...member, ...avatarShape(member.id)})),
           messages,
           queue: messageQueue.waiting(room.id).map(item=>{
-            const run=activeRuns.get(room.id),own=item.author_id===user.id,mayManage=own||room.member_role==="owner";
+            const run=activeRuns.get(room.id),own=item.author_id===user.id,mayManage=own||refreshedRoom.member_role==="owner";
             return {id:item.id,roomId:room.id,text:item.payload.text,author:item.author,authorId:item.author_id,
               createdAt:item.created_at,state:"queued",steering:Boolean(item.payload.continuation),
               attachmentNames:item.payload.attachmentIds.map(id=>db.prepare("SELECT name FROM attachments WHERE id=?").get(id)?.name).filter(Boolean),

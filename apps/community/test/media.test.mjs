@@ -36,6 +36,13 @@ test("attachment upload validates signature, binds atomically, and is member-onl
   const stored = await stat(join(dataDir, "media", attachment.id)); assert.equal(stored.mode & 0o777, 0o600);
 });
 
+test("attachment keeps a Korean file name readable", async (t) => {
+  const { app } = await fixture(); t.after(() => app.close());
+  const auth = await register(app, "media_korean"); const room = await createRoom(app, auth);
+  const r = await fetch(`${app.url}/api/rooms/${room}/attachments`, { method: "POST", headers: { cookie: auth.cookie, "x-csrf-token": auth.csrf }, body: form(Buffer.from("89504e470d0a1a0a", "hex"), "회의 메모 3시.png") });
+  assert.equal(r.status, 201); assert.equal((await r.json()).attachment.name, "회의 메모 3시.png");
+});
+
 test("attachment size limit rejects oversized streams", async (t) => {
   const { app } = await fixture(); t.after(() => app.close());
   const auth = await register(app, "media_size"); const room = await createRoom(app, auth);
