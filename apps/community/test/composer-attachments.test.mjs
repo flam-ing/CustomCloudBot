@@ -90,7 +90,7 @@ function setupSubmit({ paneMode, busy = true, uploading = false, error = false, 
   const input = { value: "", style: {}, focus() {} }, pane = { roomId: "room-a", model: "m", effort: "high", data: { busy }, attachmentGeneration: 1, pendingAttachments: [{ uploading, error: error ? "failed" : undefined, attachment: uploading || error ? null : { id: "image-1" } }] };
   const state = { selectedRoom: "room-a", session: { user: { id: "u" } }, pendingAttachments: pane.pendingAttachments, attachmentGeneration: 1, selectedBots: ["bot"], roomData: pane.data, extra: [pane] };
   const calls = [], notices = [], bubbles = [];
-  const context = { state, crypto: { randomUUID: () => "n" }, presenceErrors: new Set(), topicPrompts: new Set(), pendingMessages: new Map(), els: {},
+  const context = { state, composerRecorder: { status: "idle", context: null }, crypto: { randomUUID: () => "n" }, presenceErrors: new Set(), topicPrompts: new Set(), pendingMessages: new Map(), els: {},
     $: selector => selector === "textarea" || selector === "#message-input" ? input : { value: "m" },
     composerBlocked: () => false, offerTopicChoice: () => false, contextOwnerCurrent: () => true,
     api: async (path, options) => { calls.push({ path, body: JSON.parse(options.body) }); if (fail) throw new Error("retry"); return { queued: busy }; },
@@ -101,7 +101,8 @@ function setupSubmit({ paneMode, busy = true, uploading = false, error = false, 
   };
   const start = paneMode ? "async function submitPane(" : "async function submitMessage(";
   const end = paneMode ? "async function refreshExtra(" : "async function authSubmit(";
-  vm.runInNewContext(source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))) + `\nthis.submit = () => ${paneMode ? "submitPane({preventDefault(){},currentTarget:{}},0,true)" : "submitMessage({preventDefault(){}},true)"};`, context);
+  const recordingGuard = source.slice(source.indexOf("function recordingBlocksSend("), source.indexOf("function syncRecordingButtons(", source.indexOf("function recordingBlocksSend(")));
+  vm.runInNewContext(recordingGuard + source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))) + `\nthis.submit = () => ${paneMode ? "submitPane({preventDefault(){},currentTarget:{}},0,true)" : "submitMessage({preventDefault(){}},true)"};`, context);
   return { ...context, input, pane, calls, notices, bubbles, submit: context.submit };
 }
 
@@ -163,4 +164,31 @@ test("completed upload removes its cancellation listener so an old signal cannot
   await app.add([file("voice.mp4", "audio/mp4")], { signal: cancel.signal });
   const item = app.owner.pendingAttachments[0]; cancel.abort();
   assert.equal(app.owner.pendingAttachments[0], item); assert.equal(item.controller.signal.aborted, false); assert.deepEqual(app.revoked, []);
+});
+
+
+test("an active recording blocks main and split sends without clearing text or photo drafts", async () => {
+  for (const paneMode of [false, true]) for (const status of ["requesting", "recording", "stopping", "uploading"]) {
+    const app = setupSubmit({ paneMode }), owner = paneMode ? app.pane : app.state;
+    app.input.value = "함께 보낼 설명"; app.pane.draft = app.input.value;
+    const attachments = owner.pendingAttachments;
+    app.composerRecorder.status = status; app.composerRecorder.context = { pane: paneMode ? app.pane : null };
+    await app.submit();
+    assert.equal(app.calls.length, 0, `${paneMode ? "split" : "main"}: ${status}`);
+    assert.equal(app.bubbles.length, 0); assert.equal(app.input.value, "함께 보낼 설명");
+    assert.equal(app.pane.draft, "함께 보낼 설명"); assert.equal(owner.pendingAttachments, attachments);
+    assert.equal(owner.pendingAttachments[0].attachment.id, "image-1");
+    assert.match(app.notices[0], /녹음을 마치거나 취소/);
+  }
+});
+
+test("a recording in another composer does not block main or split text and photo sends", async () => {
+  for (const paneMode of [false, true]) {
+    const app = setupSubmit({ paneMode }); app.input.value = "다른 대화의 요청";
+    app.composerRecorder.status = "recording";
+    app.composerRecorder.context = { pane: paneMode ? null : { roomId: "another-pane" } };
+    await app.submit();
+    assert.equal(app.calls.length, 1); assert.equal(app.calls[0].body.text, "다른 대화의 요청");
+    assert.deepEqual(Array.from(app.calls[0].body.attachmentIds), ["image-1"]); assert.equal(app.notices.length, 0);
+  }
 });

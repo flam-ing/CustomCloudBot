@@ -34,7 +34,7 @@ function fixture({ paneMode = false, text = '사진을 확인해 줘', busy = fa
   const responses = [];
   let nonce = 0, availabilityChanges = 0, refreshFailure = null;
   const context = {
-    state, pendingMessages, MONITOR_ROOM: 'monitor', modelChanges: new Map(), branchOperations: new Set(),
+    state, composerRecorder: { status: 'idle', context: null }, pendingMessages, MONITOR_ROOM: 'monitor', modelChanges: new Map(), branchOperations: new Set(),
     topicPrompts: new Set(), presenceErrors: new Set(), Map, Set, JSON, Object,
     crypto: { randomUUID: () => `nonce-${++nonce}` },
     $: selector => ({ '#message-input': input, textarea: input, '#model-select': model, '.model-select': model,
@@ -71,6 +71,7 @@ function fixture({ paneMode = false, text = '사진을 확인해 줘', busy = fa
   // The VM globals object holds the exported wrappers and the real app functions.
   const runtime = { ...context, form };
   vm.runInNewContext(
+    functionSource('function recordingBlocksSend(', 'function syncRecordingButtons(') +
     functionSource('async function submitMessage(', 'async function authSubmit(') +
     functionSource('async function submitPane(', 'async function refreshExtra(') +
     functionSource('async function retryPendingMessage(', 'function renderBotPicker(') +
