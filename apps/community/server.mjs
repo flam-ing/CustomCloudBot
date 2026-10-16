@@ -16,6 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import { SessionRuntime } from "@open-grokbot/runner";
 import { connectedServiceTools, CONNECTED_SERVICE_PROMPT, createIntegrations } from "./integrations.mjs";
 import { ApiLlm } from "./model.mjs";
+import { createRunModelControl } from "./model-control.mjs";
 import { createUsageStore } from "./usage.mjs";
 import { createSetupVault } from "./setup-vault.mjs";
 import { serviceIdentity } from "./identity.mjs";
@@ -220,12 +221,24 @@ export async function startCommunity(options = {}) {
   const roomJobs = new Set();
   const activeRuns = new Map();
   const roomProgress = new Map();
+  const modelStates = new Map();
   const progressClients = new Map();
   function reportProgress(roomId,stage,label) {
     const event={stage,label,at:Date.now()};
     const history=roomProgress.get(roomId)||[];history.push(event);roomProgress.set(roomId,history.slice(-40));
     if(roomProgress.size>200) {for(const key of roomProgress.keys()){if(!roomJobs.has(key)){roomProgress.delete(key);break;}}}
     for(const client of progressClients.get(roomId)||[]) client.send("progress",event);
+  }
+  function modelStateView(roomId,userId,status=modelStates.get(roomId)) {
+    if(!status)return null;
+    const run=activeRuns.get(roomId);
+    return {...status,canControl:Boolean(run?.modelControl?.active && run.modelControl.status.runId===status.runId && run.userId===userId)};
+  }
+  function publishModelState(roomId,status) {
+    if(status.phase==="waiting")reportProgress(roomId,"waiting","모델 선택 기다리는 중");
+    modelStates.set(roomId,status);
+    if(modelStates.size>200)for(const id of modelStates.keys()){if(!activeRuns.has(id)){modelStates.delete(id);break;}}
+    for(const client of progressClients.get(roomId)||[])client.send("model-control",modelStateView(roomId,client.userId,status));
   }
   function finishProgress(roomId) {
     for(const client of [...(progressClients.get(roomId)||[])]) {client.send("done",{});client.close();}
@@ -624,6 +637,10 @@ export async function startCommunity(options = {}) {
     const activeRun = {controller,userId,selected:[...selected],queueId:channel.queueId || null,
       continuationState:null,steeringQueueId:null};
     activeRuns.set(room.id,activeRun);
+    modelStates.delete(room.id);
+    if(choice?.apiKey)activeRun.modelControl=createRunModelControl({userId,choice:{...choice,automatic:choice.automatic??!channel.modelChoice},signal:controller.signal,
+      publish:status=>publishModelState(room.id,status),waitMs:options.modelControlWaitMs??120000});
+    let runOutcome="exhausted";
     let runtime, jobDir;
     let calls = 0;
     const turnReplies=[];
@@ -689,6 +706,7 @@ export async function startCommunity(options = {}) {
                 toolDefinitions: [...serviceTools, ...(hasBrowser ? BROWSER_TOOL_DEFINITIONS : []), ...(hostExecutor ? HOST_ADMIN_TOOLS : [])],
                 onProgress: (stage,label)=>{if(!controller.signal.aborted)reportProgress(room.id,stage,label);},
                 onUsage: recordUsage(room.id),
+                modelControl:activeRun.modelControl,
                 browser: personal || hasBrowser || ownerAccess ? async (name,args,opts) => {
                   controller.signal.throwIfAborted();
                   const checkpoint=beginTool(activeRun.continuationState,name,args);
@@ -767,19 +785,21 @@ export async function startCommunity(options = {}) {
       });
       controller.signal.throwIfAborted();
       if(!turnReplies.length && !closing)insertMessage(room.id,"system","안내","모델이 답변을 반환하지 않았습니다. 다시 시도하거나 다른 모델을 선택해 주세요.");
+      if(turnReplies.length)runOutcome="complete";
       return {ok:turnReplies.length>0,text:turnReplies.join("\n\n") || "답변을 만들지 못했습니다. 앱에서 모델 연결을 확인한 뒤 다시 요청해 주세요."};
     } catch {
-      if(controller.signal.aborted) return {ok:false,interrupted:true,text:"요청이 중지되었습니다. 이미 실행된 변경은 자동으로 되돌리지 않습니다."};
+      if(controller.signal.aborted) {runOutcome="stopped";return {ok:false,interrupted:true,text:"요청이 중지되었습니다. 이미 실행된 변경은 자동으로 되돌리지 않습니다."};}
       reportProgress(room.id,"error","요청을 완료하지 못했습니다");
       if (!closing)
         insertMessage(
           room.id,
           "system",
           "안내",
-          "봇이 답변을 완료하지 못했습니다. 모델 연결이나 사용량 제한을 확인해 주세요.",
+          activeRun.modelControl ? "연결된 모델에서 답변을 받지 못해 멈췄습니다. 모델을 선택한 뒤 다시 요청해 주세요." : "봇이 답변을 완료하지 못했습니다. 모델 연결이나 사용량 제한을 확인해 주세요.",
         );
       return {ok:false,text:"작업을 완료하지 못했습니다. 앱의 메일 작업 대화에서 진행 내용을 확인해 주세요. 중복 실행을 피하기 위해 작업을 자동으로 다시 실행하지 않았습니다."};
     } finally {
+      activeRun.modelControl?.finish(runOutcome);
       runtime?.dispose();
       if (jobDir)
         await rm(jobDir, { recursive: true, force: true }).catch(() => {});
@@ -952,7 +972,7 @@ export async function startCommunity(options = {}) {
       roomProgress.set(room.id,[]);
       roomJobs.add(room.id);
       reportProgress(room.id,"accepted","요청 접수됨");
-      const job = botRun(room, selected, user.id, choice, {signal,requestText:content,queueId:queuedItem?.id,continuation:queuedItem?.payload.continuation});
+      const job = botRun(room, selected, user.id, choice, {signal,requestText:content,modelChoice,effortChoice,queueId:queuedItem?.id,continuation:queuedItem?.payload.continuation});
       jobs.add(job);
       void job.then(result=>{if(queuedItem)messageQueue.finish(queuedItem.id,result.interrupted?"interrupted":result.ok?"completed":"failed");}).finally(() => {jobs.delete(job);scheduleQueueDrain();}).catch(() => {});
     } else if(queuedItem) {
@@ -1054,6 +1074,7 @@ export async function startCommunity(options = {}) {
           "/message-format.mjs": ["message-format.mjs", "text/javascript"],
           "/transcript.mjs": ["transcript.mjs", "text/javascript"],
           "/composer-recorder.mjs": ["composer-recorder.mjs", "text/javascript"],
+          "/model-failover.mjs": ["model-failover.mjs", "text/javascript"],
           "/model-picker.mjs": ["model-picker.mjs", "text/javascript"],
           "/app.js": ["app.js", "text/javascript"],
           "/conversation-ui.mjs": ["conversation-ui.mjs", "text/javascript"],
@@ -1765,10 +1786,34 @@ export async function startCommunity(options = {}) {
         throw failure(404,"찾을 수 없습니다.");
       }
       const match = url.pathname.match(
-        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage|routines|export))?$/,
+        /^\/api\/rooms\/([a-f0-9-]{36})(?:\/(messages|invites|preferences|fork|merge|shared-copy|compact|progress|context-reset|usage|routines|export|model-control))?$/,
       );
       if (!match) throw failure(404, "찾을 수 없습니다.");
       const room = roomFor(match[1], user);
+      if(match[2]==="model-control" && method==="POST") {
+        if(userFor(req)?.sessionHash!==user.sessionHash)throw failure(401,"로그인이 필요합니다.");
+        const run=activeRuns.get(room.id),control=run?.modelControl;
+        if(!control?.active || body.runId!==control.status.runId)throw failure(409,"이미 끝났거나 새로 시작한 요청입니다.");
+        if(run.userId!==user.id)throw failure(403,"이 요청을 보낸 사용자만 모델을 바꾸거나 중지할 수 있습니다.");
+        if(!control.status.visible)throw failure(409,"모델 전환 안내가 표시된 요청에서 사용할 수 있습니다.");
+        if(!["auto","stop","select"].includes(body.action))throw failure(400,"모델 전환 동작을 확인해 주세요.");
+        limit("model-control:"+user.id,20);
+        if(body.action==="stop") {
+          run.controller.abort();control.finish("stopped");
+          return reply(res,200,{ok:true,status:modelStateView(room.id,user.id)});
+        }
+        const model=body.action==="select"?text(body.model,200,true):"";
+        if(model&&!/^[\w.:/@+-]{1,200}$/.test(model))throw failure(400,"모델을 다시 선택해 주세요.");
+        const revision=control.getSelection().revision;
+        await pool.ensureModels?.();
+        if(userFor(req)?.sessionHash!==user.sessionHash)throw failure(401,"로그인이 필요합니다.");
+        roomFor(room.id,user);
+        if(activeRuns.get(room.id)!==run||!control.active||control.getSelection().revision!==revision)throw failure(409,"요청 상태가 바뀌었습니다. 현재 상태에서 다시 선택해 주세요.");
+        const next=chooseModel(model,control.getSelection().choice?.effort||"");
+        if(!next?.apiKey)throw failure(409,"지금 사용할 수 있는 모델이 없습니다. 잠시 후 다시 선택해 주세요.");
+        control.switchChoice({...next,automatic:body.action==="auto"});
+        return reply(res,200,{ok:true,status:modelStateView(room.id,user.id)});
+      }
       if (!match[2] && method === "PATCH") {
         if(userFor(req)?.sessionHash!==user.sessionHash)throw failure(401,"로그인이 필요합니다.");
         if(room.id===MONITOR_ROOM || room.member_role!=="owner" || room.owner_id!==user.id)throw failure(403,"대화 소유자만 이름을 바꿀 수 있습니다.");
@@ -1824,10 +1869,12 @@ export async function startCommunity(options = {}) {
         res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no"});
         res.flushHeaders();
         let heartbeat,deadline,closed=false;
-        const client={send(event,data){if(!closed&&!res.destroyed){if(!res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))client.close();}},close(){if(closed)return;closed=true;clearInterval(heartbeat);clearTimeout(deadline);clients.delete(client);if(!clients.size)progressClients.delete(room.id);res.end();}};
+        const client={userId:user.id,send(event,data){if(!closed&&!res.destroyed){if(!res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))client.close();}},close(){if(closed)return;closed=true;clearInterval(heartbeat);clearTimeout(deadline);clients.delete(client);if(!clients.size)progressClients.delete(room.id);res.end();}};
         clients.add(client);progressClients.set(room.id,clients);
         res.on("close",()=>client.close());
         for(const event of roomProgress.get(room.id)||[])client.send("progress",event);
+        const modelState=modelStateView(room.id,user.id);
+        if(modelState)client.send("model-control",modelState);
         if(!roomJobs.has(room.id)){client.send("done",{});client.close();return;}
         if(closed)return;
         heartbeat=setInterval(()=>{try{roomFor(room.id,userFor(req));res.write(": heartbeat\n\n");}catch{client.close();}},15000);heartbeat.unref();
@@ -1989,6 +2036,7 @@ export async function startCommunity(options = {}) {
           }),
           context: (({text,...metadata})=>metadata)(contextFor(room.id)),
           progress: roomJobs.has(room.id) ? roomProgress.get(room.id)||[] : [],
+          modelControl:modelStateView(room.id,user.id),
           busy: roomJobs.has(room.id),
         });
       }

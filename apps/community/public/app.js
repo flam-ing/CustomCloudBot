@@ -18,6 +18,7 @@ import { sessionColors } from "/session-colors.js";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
 import { createMessageQueue } from "/message-queue.js";
+import { createModelFailoverUI } from "/model-failover.mjs";
 import { pasteComposerImages, uploadAttachmentFiles, clearAttachmentDraft, removeAttachmentDraft } from "/composer-attachments.mjs";
 import { suggestTopicSwitch } from "/topic-switch.mjs";
 const inviteLinks = createInviteLinks();
@@ -57,6 +58,7 @@ let sharingUI;
 let routineUI;
 let voiceUI;
 let messageQueueUI;
+let modelFailoverUI;
 const topicPrompts = new Set();
 const pendingMessages = new Map();
 const presenceTurns = new Map();
@@ -253,6 +255,7 @@ function showAuth() {
   closeContextPopover();
   resetSidebarState();
   modelChanges.clear();
+  modelFailoverUI?.reset();
   cancelActiveRecording();
   pwaUI?.setSession(null);
   els.auth.classList.remove("is-hidden");
@@ -752,6 +755,7 @@ function openArchivedConversations() {
   dialog.addEventListener("close", () => { dialog.remove(); $("#profile-customize").focus(); }); document.body.append(dialog); dialog.showModal();
 }
 function showEmpty() {
+  modelFailoverUI?.reset();
   cancelActiveRecording();
   closeBotPickers();
   disposeTranscript(els.messages);
@@ -792,6 +796,7 @@ async function selectRoom(id) {
   } catch {}
   state.roomData = null;
   messageQueueUI?.render($("#composer-form"), id);
+  modelFailoverUI?.render($("#composer-form"),id,null);
   syncProgressStreams();
   cancelActiveRecording();
   clearPendingAttachments();
@@ -861,6 +866,7 @@ async function refreshRoom(force = false) {
     userId = state.session?.user?.id;
   if (!roomId || (state.pollBusy && !force)) return;
   const request = ++state.roomRequest;
+  const modelStateAtRequest=state.roomData?.modelControl;
   state.pollBusy = true;
   try {
     if (roomId === MONITOR_ROOM) {
@@ -875,6 +881,8 @@ async function refreshRoom(force = false) {
       request !== state.roomRequest
     )
       return;
+    if(data.busy&&!data.modelControl&&state.roomData?.modelControl!==modelStateAtRequest)data.modelControl=state.roomData?.modelControl;
+    data.modelControl = latestModelControl(state.roomData?.modelControl,data.modelControl);
     const unchanged = JSON.stringify(state.roomData) === JSON.stringify(data);
     state.roomData = data;
     notificationUI?.observeRoom(data, { userId });
@@ -986,6 +994,7 @@ function paintPending(roomId, forceBottom = false) {
 function renderRoom(data, forceBottom = false) {
   if(data.room) {const room=state.rooms.find(r=>r.id===data.room.id);if(room&&room.name!==data.room.name){room.name=data.room.name;els.roomTitle.textContent=room.name;renderRooms();}}
   renderContextMeter(data.context);
+  modelFailoverUI?.render($("#composer-form"),data.room.id,data.modelControl);
   messageQueueUI?.render($("#composer-form"), data.room.id, data.queue);
   renderConversation(els.messages, mergePendingMessages(data.messages || [], pendingMessages.get(data.room.id)), {
     roomId: data.room.id, busy: !!data.busy, forceBottom,
@@ -1083,6 +1092,10 @@ function syncProgressStreams() {
         try { const progress = JSON.parse(event.data); addProgress(entry, progress); notificationUI?.observeProgress(roomId, progress, { userId }); } catch { return; }
         renderProgressRoom(roomId);
       });
+      source.addEventListener("model-control", event => {
+        if(progressStreams.get(roomId)!==entry||entry.source!==source||state.session?.user?.id!==userId)return;
+        try {renderModelControl(roomId,JSON.parse(event.data));} catch { /* Polling reconciles invalid events. */ }
+      });
       source.addEventListener("done", () => {
         if (progressStreams.get(roomId) !== entry || entry.source !== source) return;
         source.close();
@@ -1103,6 +1116,23 @@ function syncProgressStreams() {
     renderProgressRoom(roomId);
   }
   updateAgentPresence();
+}
+function latestModelControl(previous, incoming) {
+  if (!previous || !incoming) return incoming ?? null;
+  if (previous.runId === incoming.runId) return previous.sequence > incoming.sequence ? previous : incoming;
+  return previous.startedAt > incoming.startedAt ? previous : incoming;
+}
+function renderModelControl(roomId, status) {
+  if (state.selectedRoom === roomId && state.roomData?.room?.id === roomId) {
+    state.roomData.modelControl=latestModelControl(state.roomData.modelControl,status);
+    modelFailoverUI?.render($("#composer-form"),roomId,state.roomData.modelControl);
+  }
+  state.extra.forEach((pane,index)=>{
+    if(pane.roomId!==roomId||pane.data?.room?.id!==roomId)return;
+    pane.data.modelControl=latestModelControl(pane.data.modelControl,status);
+    const form=$$(".extra-pane")[index]?.querySelector(".pane-composer");
+    if(form)modelFailoverUI?.render(form,roomId,pane.data.modelControl);
+  });
 }
 function renderProgressRoom(roomId) {
   updateAgentPresence();
@@ -2129,8 +2159,8 @@ function decorateEffortPickers() {
 }
 
 let modelBrowser;
-function openModelBrowser(select,trigger) {
-  if(select.disabled)return;
+function openModelBrowser(select,trigger,{onChoose}={}) {
+  if(select.disabled&&!onChoose)return;
   if(!modelBrowser){
     modelBrowser=document.createElement("dialog");modelBrowser.className="model-browser";modelBrowser.setAttribute("aria-labelledby","model-browser-title");
     modelBrowser.innerHTML='<header><div><span class="picker-eyebrow">MODEL LIBRARY</span><h2 id="model-browser-title">어떤 모델과 대화할까요?</h2></div><button type="button" class="model-browser-close" aria-label="모델 선택 닫기">×</button></header><input class="model-search" type="search" placeholder="모델 또는 공급자 검색" aria-label="모델 또는 공급자 검색"><p class="model-count" role="status"></p><div class="model-results"></div><button class="model-load-more" type="button">더 불러오기</button>';
@@ -2151,7 +2181,7 @@ function openModelBrowser(select,trigger) {
       const name=document.createElement("strong"),detail=document.createElement("span"),badge=document.createElement("small");
       name.textContent=modelLabel(model);detail.textContent=(model.providers||[]).join(" · ");badge.textContent=select.value===model.value?"선택됨":recommended.has(model.value)?"추천":model.id;
       button.append(name,detail,badge);button.title=model.id;
-      button.onclick=()=>{modelBrowser.close();void requestModelChange(select,model.value);};results.append(button);
+      button.onclick=()=>{modelBrowser.close();if(onChoose)void onChoose(model.value);else void requestModelChange(select,model.value);};results.append(button);
     }
     load.hidden=count>=matching.length;
   }
@@ -2307,6 +2337,7 @@ function renderExtraPanes() {
     messageQueueUI?.render(form, pane.roomId, pane.data?.queue);
     section.append(header, list, form);
     grid.append(section);
+    modelFailoverUI?.render(form,pane.roomId,pane.data?.modelControl);
     renderConversation(list, mergePendingMessages(pane.data?.messages || [], pendingMessages.get(pane.roomId)), {
       pane, roomId: pane.roomId, busy: !!pane.data?.busy && pane.data.room?.id === pane.roomId,
       emptyNote: pane.roomId ? "메시지를 불러오는 중…" : "이 칸을 누른 뒤 왼쪽 대화를 고르세요.",
@@ -2418,11 +2449,14 @@ async function refreshExtra(index) {
   const pane = state.extra[index];
   if (!pane?.roomId || pane.busy) return;
   const request = ++pane.request;
+  const modelStateAtRequest=pane.data?.modelControl;
   const roomId = pane.roomId, userId = state.session?.user?.id;
   pane.busy = true;
   try {
     const data = await api(`/api/rooms/${encodeURIComponent(roomId)}`);
     if (state.session?.user?.id !== userId || state.extra[index] !== pane || pane.roomId !== roomId || pane.request !== request) return;
+    if(data.busy&&!data.modelControl&&pane.data?.modelControl!==modelStateAtRequest)data.modelControl=pane.data?.modelControl;
+    data.modelControl=latestModelControl(pane.data?.modelControl,data.modelControl);
     const unchanged = JSON.stringify(pane.data) === JSON.stringify(data);
     pane.data = data;
     notificationUI?.observeRoom(data, { userId });
@@ -2432,6 +2466,7 @@ async function refreshExtra(index) {
     const section = $$(".extra-pane")[index];
     if (!section) return;
     renderContextMeter(data.context,$(".pane-composer",section),pane);
+    modelFailoverUI?.render($(".pane-composer",section),roomId,data.modelControl);
     messageQueueUI?.render($(".pane-composer",section), roomId, data.queue);
     const list = $(".message-list", section);
     renderConversation(list, mergePendingMessages(data.messages || [], pendingMessages.get(roomId)), { pane, roomId, busy: !!data.busy });
@@ -2650,6 +2685,23 @@ messageQueueUI = createMessageQueue({api, getSession:()=>state.session, toast, o
   state.extra.forEach((pane,index)=>{if(pane.roomId===roomId)tasks.push(refreshExtra(index));});
   await Promise.all(tasks);
 }});
+modelFailoverUI = createModelFailoverUI({api,getSession:()=>state.session,toast,
+  onRefresh:async roomId=>{
+    const tasks=[];
+    if(state.selectedRoom===roomId)tasks.push(refreshRoom(true));
+    state.extra.forEach((pane,index)=>{if(pane.roomId===roomId)tasks.push(refreshExtra(index));});
+    await Promise.all(tasks);
+  },
+  onSelectModel:({roomId,select:choose})=>{
+    const index=state.extra.findIndex(pane=>pane.roomId===roomId);
+    const form=state.selectedRoom===roomId?$("#composer-form"):index>=0?$$(".extra-pane")[index]?.querySelector(".pane-composer"):null;
+    const model=form?.querySelector(".model-select"),trigger=form?.querySelector(".model-failover-select");
+    if(!model||!trigger)return;
+    // The in-flight request keeps its messages and completed tools. This choice
+    // only replaces its next model call; regular composer preferences stay intact.
+    openModelBrowser(model,trigger,{onChoose:choose});
+  }
+});
 voiceUI = createVoiceCall({api,getSession:()=>state.session,getRoom:id=>state.rooms.find(room=>room.id===id),toast,
   beforeStart:cancelActiveRecording,
   getSelection:id=>{

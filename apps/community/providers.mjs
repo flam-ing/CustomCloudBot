@@ -1,5 +1,15 @@
 export const EFFORTS = ["low", "medium", "high", "xhigh"];
 const validModel = (value) => typeof value === "string" && /^[\w.:/@+-]{1,200}$/.test(value) ? value : "";
+const NON_CHAT_MODEL = /whisper|orpheus|prompt-guard|safeguard|embedding|embed-|rerank|retriever|native-audio|live-preview|image|vision|audio|speech|transcri(?:be|ption)|moderation|reward|(?:^|[\/.-])(?:tts|asr|guard|clip|siglip|bge|e5|flux|parakeet|diffdock|genmol|boltz|alphafold|esmfold|fourcastnet|cuopt|maisi)(?:[\/.-]|$)|stable-diffusion/i;
+const PREFERRED_CHAT_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash", "command-a-03-2025"];
+function chatRank(id) {
+  const preferred = PREFERRED_CHAT_MODELS.indexOf(id.replace(/:free$/, ""));
+  if (preferred >= 0) return preferred;
+  const experimental = /preview|experimental|(?:^|[-/])exp(?:[-/]|$)/i.test(id) ? 30 : 0;
+  if (/instruct|chat|(?:^|\/)(?:gpt-|grok-|gemini-|command-|o[134](?:-|$))|deepseek.*(?:v[3-9]|r1)|llama.*(?:3\.3|3\.1).*70b|qwen.*(?:qwen3|3\.)|openrouter\/free/i.test(id)) return 10 + experimental;
+  if (/(?:^|[\/-])(?:llama|nemotron|gemma|mistral|mixtral|ministral|phi)-/i.test(id)) return 20 + experimental;
+  return 100 + experimental;
+}
 
 const KNOWN = [
   ["huggingface", "https://router.huggingface.co/v1", "HUGGINGFACE_TOKEN"],
@@ -84,6 +94,7 @@ export function createProviderPool(env = {}, fetchImpl = fetch) {
   const catalogs = new Map();
   let cursor = 0;
   const cooldowns = new Map();
+  const modelCooldowns = new Map();
   let lastListed = 0;
   let pending;
   const configuredModel = (provider) => validModel(provider.model || env[provider.name.toUpperCase() + "_MODEL"] || env.COMMUNITY_LLM_MODEL);
@@ -125,7 +136,9 @@ export function createProviderPool(env = {}, fetchImpl = fetch) {
           let id = typeof row === "string" ? row : row?.id || row?.name;
           if(provider.name === "gemini" && typeof id === "string") id=id.replace(/^models\//, "");
           if (typeof id !== "string" || !/^[\w.:/@+-]{1,200}$/.test(id)) continue;
-          if (/whisper|orpheus|prompt-guard|safeguard|embedding|embed-|rerank|native-audio|live-preview|image|vision|(?:^|[\/.-])tts(?:[\/.-]|$)/i.test(id)) continue;
+          if (NON_CHAT_MODEL.test(id)) continue;
+          if (Array.isArray(row?.supportedGenerationMethods) && !row.supportedGenerationMethods.includes("generateContent")) continue;
+          if (Array.isArray(row?.endpoints) && !row.endpoints.includes("chat")) continue;
           ids.add(id);
           models.push({
             provider: provider.name,
@@ -149,30 +162,60 @@ export function createProviderPool(env = {}, fetchImpl = fetch) {
     await pending;
   }
   function choose(modelId, effort) {
-    const selected = typeof modelId === "string" && /^[\w.:/@+-]{1,200}$/.test(modelId) ? modelId : "";
-    let candidates = providers.flatMap(provider => {
-      if ((cooldowns.get(provider.slot) || 0) > Date.now()) return [];
+    const selected = validModel(modelId);
+    if (modelId && !selected) return null;
+    const now = Date.now();
+    for (const cache of [cooldowns, modelCooldowns]) for (const [key, until] of cache) if (until <= now) cache.delete(key);
+    const modelKey = candidate => candidate.slot + ":" + candidate.model;
+    const isCandidateAvailable = candidate => (cooldowns.get(candidate.slot) || 0) <= Date.now() && (modelCooldowns.get(modelKey(candidate)) || 0) <= Date.now();
+    const groups = new Map();
+    for (const provider of providers) {
+      if ((cooldowns.get(provider.slot) || 0) > now) continue;
       const listed = catalogs.get(provider.slot);
-      const configured = configuredModel(provider);
-      let ids = [...(listed || [])];
+      let ids = selected ? (listed?.has(selected) ? [selected] : []) : [...(listed || [])].filter(id => !NON_CHAT_MODEL.test(id));
       // OpenRouter auto mode never silently selects a paid model.
       if (!selected && provider.name === "openrouter") ids = ids.filter(id => id.endsWith(":free") || id === "openrouter/free");
-      const model = selected ? (listed?.has(selected) ? selected : "") :
-        (ids.includes(configured) ? configured : ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash", "command-a-03-2025"].find(id => ids.includes(id)) || ids.sort()[0]);
-      return model ? [{...provider, model, effort: EFFORTS.includes(effort) ? effort : "", provider: provider.name}] : [];
+      ids = ids.filter(model => isCandidateAvailable({slot:provider.slot, model}));
+      if (!ids.length) continue;
+      // Distinct custom endpoints are separate routes even if their display
+      // provider names match. Extra keys for one endpoint share a route.
+      const route = provider.name + "\n" + provider.baseUrl;
+      if (!groups.has(route)) groups.set(route, []);
+      groups.get(route).push({provider, ids});
+    }
+    let available = [...groups.values()];
+    if (selected && !selected.endsWith(":free") && available.some(group => group[0].provider.name !== "openrouter")) available = available.filter(group => group[0].provider.name !== "openrouter");
+    if (!available.length) return null;
+    const rotation = cursor++, start = rotation % available.length;
+    available = [...available.slice(start), ...available.slice(0, start)];
+    const routes = available.map(group => {
+      const configured = [...new Set(group.map(({provider}) => configuredModel(provider)).filter(Boolean))];
+      const rank = id => configured.includes(id) ? configured.indexOf(id) - configured.length : chatRank(id);
+      const ids = [...new Set(group.flatMap(entry => entry.ids))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).slice(0, selected ? 1 : 3);
+      const primary = [], duplicates = [];
+      for (const id of ids) {
+        const keys = group.filter(entry => entry.ids.includes(id));
+        const offset = rotation % keys.length;
+        const ordered = [...keys.slice(offset), ...keys.slice(0, offset)];
+        ordered.forEach(({provider}, index) => {
+          const candidate = {...provider, model:id, effort:EFFORTS.includes(effort) ? effort : "", provider:provider.name};
+          (index ? duplicates : primary).push(candidate);
+        });
+      }
+      return {primary, duplicates};
     });
-    if(selected && !selected.endsWith(":free") && candidates.some(p=>p.provider!=="openrouter"))candidates=candidates.filter(p=>p.provider!=="openrouter");
-    if (!candidates.length) return null;
-    const start = cursor++ % candidates.length;
-    const ordered = [...candidates.slice(start), ...candidates.slice(0, start)];
-    // Try one key per provider first; repeated keys must not consume the entire turn.
-    const first = [], rest = [], seen = new Set();
-    for (const candidate of ordered) { (seen.has(candidate.provider) ? rest : first).push(candidate); seen.add(candidate.provider); }
-    const attempts = [...first, ...rest];
+    // Each route gets its preferred model first, then up to two alternatives.
+    // Duplicate credentials for a model come last, within the same turn budget.
+    const attempts = [];
+    for (let rank = 0; rank < (selected ? 1 : 3); rank++) for (const route of routes) if (route.primary[rank]) attempts.push(route.primary[rank]);
+    for (const route of routes) attempts.push(...route.duplicates);
+    attempts.length = Math.min(attempts.length, 8);
     const choice = attempts[0];
-    return {...choice, attempts, onProviderFailure: (candidate, status, retryAfter) => {
-      const duration = status === 401 || status === 403 ? 3600000 : Math.max(30000, Math.min(3600000, retryAfter || 60000));
-      cooldowns.set(candidate.slot, Date.now() + duration);
+    return {...choice, automatic:!selected, attempts, isCandidateAvailable, onProviderFailure: (candidate, status, retryAfter, details = {}) => {
+      const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60000;
+      const duration = status === 401 || status === 403 ? 3600000 : Math.max(30000, Math.min(3600000, wait));
+      const modelOnly = ![401,402,403,429].includes(status) && ([400,404].includes(status) || details?.scope === "model");
+      (modelOnly ? modelCooldowns : cooldowns).set(modelOnly ? modelKey(candidate) : candidate.slot, Date.now() + duration);
     }};
   }
   return { providers, listModels, ensureModels, choose, get configured() { return providers.length > 0; } };

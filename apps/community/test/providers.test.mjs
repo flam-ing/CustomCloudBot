@@ -96,7 +96,7 @@ test('each custom endpoint keeps its own configured model ahead of shared defaul
  const pool=createProviderPool(env,async()=>modelsResponse(['shared-default','first-chat','second-chat']));
  await pool.listModels();
  assert.deepEqual(pool.providers.map(p=>p.model),['first-chat','second-chat']);
- assert.deepEqual(pool.choose('','').attempts.map(p=>[p.baseUrl,p.model]),[
+ assert.deepEqual(pool.choose('','').attempts.slice(0,2).map(p=>[p.baseUrl,p.model]),[
   ['https://first.example/v1','first-chat'],['https://second.example/v1','second-chat'],
  ]);
 });
@@ -168,4 +168,89 @@ test('provider-specific models survive deduplication and invalid model identifie
    {name:'invalid',baseUrl:'https://other.example/v1',apiKey:'other-key',model:'bad\nmodel'},
   ])});
  assert.equal(providers.length,2);assert.equal(providers[0].model,'provider-model');assert.equal(providers[1].model,undefined);
+});
+
+test('automatic attempts try diverse chat models before duplicate keys and stay within eight requests',async()=>{
+ const env={NVIDIA_NIM_API_KEY:'nvidia-a',NVIDIA_NIM_API_KEY_2:'nvidia-b',NVIDIA_NIM_API_KEY_3:'nvidia-c',GROQ_API_KEY:'groq',OPENROUTER_API_KEY:'router'};
+ const catalogs={nvidia:['000-unclassified','openai/gpt-oss-120b','openai/gpt-oss-20b','meta/llama-3.3-70b-instruct','meta/llama-3.1-8b-instruct','nvidia/nemo-retriever','nvidia/llama-reward','nvidia/maisi-ct','black-forest-labs/flux-dev','whisper-large-v3'],
+  groq:['openai/gpt-oss-120b','openai/gpt-oss-20b'],router:['paid-model','meta-llama/llama-3.3-70b-instruct:free','openrouter/free']};
+ const pool=createProviderPool(env,async url=>modelsResponse(catalogs[url.includes('nvidia')?'nvidia':url.includes('groq')?'groq':'router']));
+ await pool.listModels();const choice=pool.choose('','high'),attempts=choice.attempts;
+ assert.equal(choice.automatic,true);assert.equal(attempts.length,8);
+ assert.equal(new Set(attempts.slice(0,3).map(candidate=>candidate.provider)).size,3,'each endpoint gets a preferred attempt first');
+ const pairs=attempts.map(candidate=>candidate.provider+':'+candidate.model);
+ assert.equal(new Set(pairs.slice(0,7)).size,7,'three NVIDIA, two Groq, two free router models precede key duplication');
+ assert.equal(new Set(attempts.filter(candidate=>candidate.provider==='nvidia').map(candidate=>candidate.model)).size,3);
+ for(const candidate of attempts){
+  assert.equal(candidate.effort,'high');assert.equal(choice.isCandidateAvailable(candidate),true);
+  assert.ok(!/paid-model|000-unclassified|retriever|reward|maisi|flux|whisper/.test(candidate.model));
+  if(candidate.provider==='openrouter')assert.ok(candidate.model.endsWith(':free')||candidate.model==='openrouter/free');
+ }
+ const next=pool.choose('','');
+ assert.notEqual(next.provider,choice.provider,'provider rotation remains available');
+});
+
+test('automatic ranking keeps configured and established chat choices ahead of arbitrary catalog ordering',async()=>{
+ const models=['000-other-deployment','chat-experimental','meta/llama-3.3-70b-instruct','openai/gpt-oss-20b','openai/gpt-oss-120b','my-deployment'];
+ const pool=createProviderPool({NVIDIA_NIM_API_KEY:'key',NVIDIA_MODEL:'my-deployment'},async()=>modelsResponse([...models].reverse()));
+ await pool.listModels();assert.deepEqual(pool.choose('','').attempts.map(candidate=>candidate.model),['my-deployment','openai/gpt-oss-120b','openai/gpt-oss-20b']);
+ const plain=createProviderPool({NVIDIA_NIM_API_KEY:'key'},async()=>modelsResponse(models));
+ await plain.listModels();assert.deepEqual(plain.choose('','').attempts.map(candidate=>candidate.model),['openai/gpt-oss-120b','openai/gpt-oss-20b','meta/llama-3.3-70b-instruct']);
+});
+
+test('explicit model retries only the same discovered ID on eligible keys, never automatic alternatives',async()=>{
+ const pool=createProviderPool({GROQ_API_KEY:'first',GROQ_API_KEY_2:'second',GROQ_API_KEY_3:'third'},async(url,options)=>modelsResponse(options.headers.authorization.endsWith('third')?['other-chat']:['chosen-chat','other-chat']));
+ await pool.listModels();
+ const first=pool.choose('chosen-chat',''),second=pool.choose('chosen-chat','');
+ assert.equal(first.automatic,false);assert.equal(first.attempts.length,2);
+ assert.ok(first.attempts.every(candidate=>candidate.model==='chosen-chat' && candidate.apiKey!=='third'));
+ assert.notEqual(first.apiKey,second.apiKey,'same-model keys rotate');
+ for(const id of ['missing-model','bad model',123])assert.equal(pool.choose(id,''),null);
+ first.onProviderFailure(first.attempts[0],404);
+ assert.equal(first.isCandidateAvailable(first.attempts[0]),false);assert.equal(first.isCandidateAvailable(first.attempts[1]),true);
+ assert.deepEqual(pool.choose('chosen-chat','').attempts.map(candidate=>candidate.apiKey),[first.attempts[1].apiKey]);
+});
+
+test('candidate model eligibility remains specific to each key catalog',async()=>{
+ const allowed=new Map([['Bearer first',['openai/gpt-oss-120b','first-chat']],['Bearer second',['openai/gpt-oss-20b','second-chat']]]);
+ const pool=createProviderPool({GROQ_API_KEY:'first',GROQ_API_KEY_2:'second',GROQ_MODEL:'not-discovered'},async(url,options)=>modelsResponse(allowed.get(options.headers.authorization)));
+ await pool.listModels();
+ for(let turn=0;turn<3;turn++)for(const candidate of pool.choose('','').attempts){
+  assert.ok(allowed.get('Bearer '+candidate.apiKey).includes(candidate.model));assert.notEqual(candidate.model,'not-discovered');
+ }
+});
+
+test('model failures cool only that key/model pair, survive catalog refresh and expire',async t=>{
+ let now=1000000;t.mock.method(Date,'now',()=>now);
+ for(const [status,details] of [[400,undefined],[404,undefined],[502,{scope:'model'}]]){
+  const pool=createProviderPool({GROQ_API_KEY:'one'},async()=>modelsResponse(['openai/gpt-oss-120b','openai/gpt-oss-20b']));
+  await pool.listModels();const choice=pool.choose('','');
+  choice.onProviderFailure(choice,status,60000,details);
+  assert.equal(choice.isCandidateAvailable(choice),false);assert.equal(choice.isCandidateAvailable(choice.attempts[1]),true);
+  assert.equal(pool.choose(choice.model,''),null);assert.equal(pool.choose('','').model,'openai/gpt-oss-20b');
+  await pool.listModels();assert.equal(pool.choose('','').model,'openai/gpt-oss-20b');
+  now+=60001;assert.equal(choice.isCandidateAvailable(choice),true);assert.equal(pool.choose('','').model,'openai/gpt-oss-120b');
+ }
+});
+
+test('authentication and quota failures cool the whole key including already-created fallback candidates',async()=>{
+ for(const status of [401,402,403,429]){
+  const pool=createProviderPool({GROQ_API_KEY:'one',GROQ_API_KEY_2:'two'},async()=>modelsResponse(['openai/gpt-oss-120b','openai/gpt-oss-20b']));
+  await pool.listModels();const choice=pool.choose('','');
+  choice.onProviderFailure(choice,status,60000,{scope:'model'});
+  assert.ok(choice.attempts.filter(candidate=>candidate.slot===choice.slot).every(candidate=>!choice.isCandidateAvailable(candidate)));
+  const next=pool.choose('','');assert.ok(next.attempts.every(candidate=>candidate.slot!==choice.slot));
+  next.onProviderFailure(next,status,60000);assert.equal(pool.choose('',''),null);
+ }
+});
+
+test('discovery excludes specialty endpoints even when their IDs do not say embedding or audio',async()=>{
+ const pool=createProviderPool({GEMINI_API_KEY:'key'},async()=>({ok:true,status:200,json:async()=>({models:[
+  {name:'models/gemini-chat',supportedGenerationMethods:['generateContent']},
+  {name:'models/gemini-vectors',supportedGenerationMethods:['embedContent']},
+  {name:'models/custom-text',endpoints:['embed','rerank']},
+  {name:'models/meta/llama-guard-3-8b'},
+ ]})}));
+ assert.deepEqual((await pool.listModels()).models.map(model=>model.id),['gemini-chat']);
+ assert.equal(pool.choose('','').model,'gemini-chat');
 });

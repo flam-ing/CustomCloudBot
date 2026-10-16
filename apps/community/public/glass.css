@@ -151,6 +151,13 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .message-queue-actions button { background: #ffffff94; border-color: #b99bdb3a; color: var(--glass-accent-strong); }
 .message-queue-actions button:hover { background: #e7daf8; border-color: #b99bdb6e; }
 .message-queue-actions .message-queue-cancel { background: transparent; color: var(--muted); }
+.model-failover { color:var(--muted); background:rgba(var(--pane-tint),.045); border-color:rgba(var(--pane-tint),.15); }
+.model-failover-actions button { color:var(--session-color,var(--glass-accent-strong)); background:rgba(255,255,255,.42); border-color:rgba(var(--pane-tint),.20); }
+.model-failover-actions button:hover:not(:disabled),
+.model-failover-actions button:focus-visible { background:rgba(var(--pane-tint),.12); border-color:var(--session-color,var(--glass-accent-strong)); }
+.model-failover-actions button:focus-visible { outline-color:var(--session-color,var(--glass-accent-strong)); }
+.model-failover-actions .model-failover-auto[aria-pressed="true"] { background:rgba(var(--pane-tint),.09); }
+.model-failover-actions .model-failover-stop { color:var(--muted); background:transparent; }
 .model-controls label, .picker-eyebrow, .model-count, .model-card span,
 .quick-model-picker h2, .quick-model-more { color: var(--muted); }
 .model-controls select, .model-trigger {

@@ -610,6 +610,12 @@ button {
 .message-queue-actions button:hover { background:#ffffff16; border-color:#ffffff30; }
 .message-queue-actions button:disabled { opacity:.45; }
 .message-queue-actions .message-queue-cancel { padding:3px 7px; border-color:transparent; color:var(--muted); font-size:17px; }
+.model-failover { margin:0 2px 6px; padding:8px 9px; border:1px solid var(--line); border-radius:11px; }
+.model-failover-message { margin:0; font-size:12px; line-height:1.55; overflow-wrap:anywhere; }
+.model-failover-actions { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.model-failover-actions[hidden] { display:none; }
+.model-failover-actions button { min-height:28px; padding:4px 8px; border:1px solid var(--line); border-radius:7px; font:inherit; font-size:11px; line-height:1.5; }
+.model-failover-actions button:disabled { opacity:.55; cursor:default; }
 .composer-row {
   display: flex;
   align-items: flex-end;
