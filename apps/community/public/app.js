@@ -564,7 +564,9 @@ async function updateRoomListPreference(room, changes) {
 }
 function sidebarRoomButton(room) {
   const button=document.createElement("button");button.dataset.dockRoom=room.id;button.draggable=false;button.type="button";
-  const openIds=new Set([state.selectedRoom,...state.extra.map(pane=>pane.roomId)]);button.className=`room-item ${openIds.has(room.id)?"is-active":""}`;button.dataset.roomId=room.id;
+  const open=sidebarOpenRoomIds().has(room.id), focused=open&&currentBranchId()===room.id;
+  button.className=`room-item${open?" is-active is-open":""}${focused?" is-selected":""}`;button.dataset.roomId=room.id;
+  if(focused)button.setAttribute("aria-current","page");
   const roomIcon=document.createElement("span");roomIcon.className="room-icon";roomIcon.append(icon("chat"));
   const copy=document.createElement("span");copy.className="room-item-copy";
   const name=document.createElement("strong");name.textContent=(room.pinned?"· ":"")+room.name;
@@ -655,6 +657,9 @@ function syncSessionActions() {
 function currentBranchId() {
   return state.focusPane > 0 ? state.extra[state.focusPane - 1]?.roomId : state.selectedRoom;
 }
+function sidebarOpenRoomIds() {
+  return new Set([state.selectedRoom,...state.extra.slice(0,Math.max(0,state.layout-1)).map(pane=>pane.roomId)].filter(Boolean));
+}
 function branchBusy(id) {
   return pendingMessages.get(id)?.retrying || branchOperations.has(id) || modelChanges.has(id) || (state.selectedRoom === id && (state.sending || state.roomData?.busy)) || state.extra.some(pane => pane.roomId === id && (pane.sending || pane.data?.busy));
 }
@@ -692,6 +697,7 @@ function renderRooms() {
   const focus = els.roomList.contains(document.activeElement) ? {roomId: document.activeElement.dataset.roomId, action: document.activeElement.dataset.branchAction} : null;
   renderAccountTools(); els.roomList.replaceChildren(); updateBranchControls(); syncSessionActions();
   const colors = sessionColors(state.rooms, state.forks);
+  const openIds = sidebarOpenRoomIds(), focusedId = currentBranchId();
   if (showDeletedRooms) {
     const archived = state.rooms.filter(room => room.archived && room.id !== MONITOR_ROOM);
     for (const room of archived) {
@@ -714,10 +720,10 @@ function renderRooms() {
     }
     const positions = new Map(geometry.nodes.map(node => [node.id,node]));
     for (const row of graph.rows) {
-      const active = currentBranchId() === row.id, position = positions.get(row.id);
-      svg.append(branchSvg("circle", {cx:position.x, cy:position.y, r:active?4:3, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node${active?" is-selected":""}`,"data-activity-room":row.id}));
+      const open = openIds.has(row.id), active = open && focusedId === row.id, position = positions.get(row.id);
+      svg.append(branchSvg("circle", {cx:position.x, cy:position.y, r:open?4:3, style:`--branch-color:${colors.get(row.id)?.color || "currentColor"}`, class:`branch-node${open?" is-open":""}${active?" is-selected":""}`,"data-activity-room":row.id}));
       const button = document.createElement("button"); button.type="button"; button.className="branch-row"; button.dataset.roomId=row.id; button.dataset.dockRoom=row.id;
-      button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
+      button.classList.toggle("is-open",open); button.classList.toggle("is-selected",active); button.classList.toggle("is-ancestor",!row.matched); if(active)button.setAttribute("aria-current","page");
       const copy=document.createElement("span"); copy.className="branch-row-copy";
       const name=document.createElement("strong"); name.textContent=branchDisplayName(row);
       if(row.room.pinned){const pin=icon("pin");pin.classList.add("branch-pin");pin.setAttribute("aria-label","고정됨");name.prepend(pin);}
@@ -726,7 +732,7 @@ function renderRooms() {
       meta.textContent=(row.operation==="merge"?"합친 대화":row.operation==="fork"?"이어진 대화":"")+(row.room.pinned?" · 고정":"");
       button.title = "드래그: 목록 사이에서 순서 이동 · 제목 위에서 Merge · 대화 영역에서 분할";
       button.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
-      button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":""}`);
+      button.setAttribute("aria-label", `${row.room.name}, ${relation}${parentNames.length?", "+parentNames.join(" 및 ")+"에서 이어짐":""}${active?", 현재 가지":open?", 열린 대화":""}`);
       copy.append(name,meta); button.append(copy);
       const grip=document.createElement("span");grip.className="session-drag-handle";grip.setAttribute("aria-hidden","true");grip.title="잡고 이동";grip.innerHTML='<svg viewBox="0 0 24 24"><path d="M8 5v14m8-14v14M5 8l3-3 3 3m2 8 3 3 3-3"/></svg>';button.append(grip);
       paintSession(button, colors.get(row.id));

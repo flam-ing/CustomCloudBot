@@ -1,0 +1,161 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
+import {layoutBranches, branchGraphGeometry, branchDisplayName} from '../public/branch-graph.mjs';
+
+const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+function functionSource(start, end) {
+  const from = source.indexOf(start), to = source.indexOf(end, from);
+  assert.ok(from >= 0 && to > from, `Application function range ${start}`);
+  return source.slice(from, to);
+}
+
+class Element {
+  constructor(tag) {
+    this.tagName = tag; this.children = []; this.dataset = {}; this.attributes = new Map(); this.className = '';
+    this.style = {setProperty() {}, removeProperty() {}};
+    this.classList = {
+      contains: name => this.className.split(/\s+/).includes(name),
+      toggle: (name, on = !this.classList.contains(name)) => {
+        this.className = [...this.className.split(/\s+/).filter(value => value && value !== name), ...(on ? [name] : [])].join(' ');
+        return on;
+      },
+      add: (...names) => names.forEach(name => this.classList.toggle(name, true)),
+      remove: (...names) => names.forEach(name => this.classList.toggle(name, false)),
+    };
+  }
+  append(...nodes) { nodes.forEach(node => { node.parent = this; this.children.push(node); }); }
+  prepend(...nodes) { nodes.forEach(node => { node.parent = this; }); this.children.unshift(...nodes); }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  setAttribute(key, value) {
+    this.attributes.set(key, String(value));
+    if (key === 'class') this.className = String(value);
+    if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = String(value);
+  }
+  getAttribute(key) { return this.attributes.get(key) ?? null; }
+  removeAttribute(key) { this.attributes.delete(key); }
+  contains(node) { return this === node || this.children.some(child => child.contains(node)); }
+  addEventListener() {}
+  querySelector() { return null; }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter(node => node !== this); }
+}
+function descendants(node) { return node.children.flatMap(child => [child, ...descendants(child)]); }
+
+function fixture({open = ['a', 'b'], focus = 0} = {}) {
+  const roomList = new Element('nav'), main = new Element('section'), grid = new Element('main');
+  grid.append(main);
+  const state = {
+    selectedRoom: open[0], extra: open.slice(1).map(roomId => ({roomId})), layout: open.length, focusPane: focus,
+    rooms: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'closed'].map((id, i) => ({id, name: `Room ${id}`, createdAt: i + 1})),
+    forks: [], pendingAttachments: [],
+  };
+  const nodes = {'#room-view': main, '#pane-grid': grid, '#message-input': {value: ''}};
+  const find = (selector, parent = grid) => descendants(parent).filter(node =>
+    selector === 'button' ? node.tagName === 'button' : selector === '[data-activity-room]' ? !!node.dataset.activityRoom :
+      selector.startsWith('.') && node.classList.contains(selector.slice(1)));
+  const runtime = {
+    state, els: {roomList}, document: {activeElement: null, createElement: tag => new Element(tag), createElementNS: (_, tag) => new Element(tag)},
+    MONITOR_ROOM: 'monitor', showDeletedRooms: false, sidebarState: {roomOrder: []}, sessionSearch: '',
+    layoutBranches, branchGraphGeometry, branchDisplayName, sessionColors: () => new Map(),
+    renderAccountTools() {}, updateBranchControls() {}, syncSessionActions() {}, syncSessionColors() {},
+    $: selector => nodes[selector], $$: find, icon: () => new Element('svg'),
+    closeBotPickers() {}, clearAttachmentDraft() {}, disposeTranscript() {}, applyDockLayout() {}, syncProgressStreams() {},
+    refreshExtras() {}, refreshExtra() {}, roomPreferences: () => ({}), composerRecorder: null, toast() {},
+    renderExtraPanes() {
+      find('.extra-pane').forEach(node => node.remove());
+      state.extra.forEach(() => { const node = new Element('section'); node.className = 'extra-pane'; grid.append(node); });
+    },
+    async selectRoom(id) { state.selectedRoom = id; runtime.renderRooms(); },
+    dockRects: open.map((_, index) => ({x: index / open.length, y: 0, w: 1 / open.length, h: 1})),
+  };
+  vm.runInNewContext([
+    functionSource('function currentBranchId(', 'function branchBusy('),
+    functionSource('function branchSvg(', 'function inheritSessionTheme('),
+    functionSource('function renderRooms(', 'function openArchivedConversations('),
+    functionSource('function sidebarRoomButton(', 'function confirmRemoveConversation('),
+    functionSource('function syncSessionActivity(', 'async function refreshSidebarActivity('),
+    functionSource('function setLayout(', 'function renderExtraPanes('),
+    functionSource('function assignExtra(', 'function bind('),
+    functionSource('async function closeDockPane(', 'function dockRoomAt('),
+  ].join('\n'), runtime);
+  runtime.renderExtraPanes(); runtime.renderRooms();
+  return {
+    state, runtime, rows: () => find('.branch-row', roomList),
+    row: id => find('.branch-row', roomList).find(node => node.dataset.roomId === id),
+    node: id => find('[data-activity-room]', roomList).find(node => node.dataset.activityRoom === id),
+  };
+}
+function assertSelection(app, open, focused) {
+  assert.deepEqual(app.rows().filter(row => row.classList.contains('is-open')).map(row => row.dataset.roomId).sort(), [...open].sort());
+  assert.deepEqual(app.rows().filter(row => row.classList.contains('is-selected')).map(row => row.dataset.roomId), focused ? [focused] : []);
+  assert.deepEqual(app.rows().filter(row => row.getAttribute('aria-current') === 'page').map(row => row.dataset.roomId), focused ? [focused] : []);
+  for (const row of app.rows()) {
+    assert.equal(app.node(row.dataset.roomId).classList.contains('is-open'), open.includes(row.dataset.roomId));
+    assert.equal(app.node(row.dataset.roomId).classList.contains('is-selected'), row.dataset.roomId === focused);
+  }
+}
+
+test('all eight visible sessions remain highlighted as focus moves, without marking closed sessions', () => {
+  const open = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'], app = fixture({open});
+  for (let focus = 0; focus < open.length; focus++) {
+    app.state.focusPane = focus; app.runtime.renderRooms();
+    assertSelection(app, open, open[focus]);
+  }
+  assert.match(app.row('a').getAttribute('aria-label'), /열린 대화/);
+  assert.match(app.row('h').getAttribute('aria-label'), /현재 가지/);
+});
+
+test('empty panes and leftover state outside the active layout do not become open or current sessions', () => {
+  const app = fixture({open: ['a', null, 'b'], focus: 1});
+  assertSelection(app, ['a', 'b'], null);
+  app.state.layout = 1; app.state.focusPane = 0; app.runtime.renderRooms();
+  assertSelection(app, ['a'], 'a');
+  app.state.selectedRoom = null; app.runtime.renderRooms();
+  assertSelection(app, [], null);
+});
+
+test('replacing a split session clears its old highlight, while swapping two open sessions retains both', () => {
+  const app = fixture({open: ['a', 'b', 'c'], focus: 1});
+  app.runtime.assignExtra(0, 'd');
+  assertSelection(app, ['a', 'd', 'c'], 'd');
+  app.runtime.assignExtra(0, 'c');
+  assertSelection(app, ['a', 'c', 'd'], 'c');
+});
+
+test('closing extra panes, promoting an extra to main, and collapsing layout immediately update sidebar highlights', async () => {
+  const app = fixture({open: ['a', 'b', 'c'], focus: 2});
+  await app.runtime.closeDockPane(2);
+  assertSelection(app, ['a', 'b'], 'a');
+  await app.runtime.closeDockPane(0);
+  assertSelection(app, ['b'], 'b');
+  app.runtime.setLayout(3);
+  assertSelection(app, ['b', 'a', 'c'], 'b');
+  app.runtime.setLayout(3);
+  assertSelection(app, ['b'], 'b');
+});
+
+test('open highlights coexist with working glow, drag handles, and search ancestor styling', () => {
+  const app = fixture({open: ['a', 'b'], focus: 1});
+  app.state.rooms.find(room => room.id === 'a').busy = true;
+  app.state.forks = [{id: 'b', parent: 'a'}]; app.runtime.sessionSearch = 'Room b'; app.runtime.renderRooms();
+  assertSelection(app, ['a', 'b'], 'b');
+  assert.ok(app.row('a').classList.contains('is-working'));
+  assert.ok(app.node('a').classList.contains('is-working'));
+  assert.ok(app.row('a').classList.contains('is-ancestor'));
+  assert.equal(app.row('a').getAttribute('aria-description'), '작업 진행 중');
+  assert.equal(app.row('a').dataset.dockRoom, 'a');
+  assert.ok(descendants(app.row('a')).some(node => node.classList.contains('session-drag-handle')));
+  assert.equal(typeof app.row('a').onclick, 'function');
+});
+
+test('the alternate room button shares open/focused semantics with the branch graph', () => {
+  const app = fixture({open: ['a', 'b'], focus: 1});
+  for (const id of ['a', 'b', 'closed']) {
+    const button = app.runtime.sidebarRoomButton(app.state.rooms.find(room => room.id === id));
+    assert.equal(button.classList.contains('is-open'), id !== 'closed');
+    assert.equal(button.classList.contains('is-active'), id !== 'closed');
+    assert.equal(button.classList.contains('is-selected'), id === 'b');
+    assert.equal(button.getAttribute('aria-current'), id === 'b' ? 'page' : null);
+  }
+});

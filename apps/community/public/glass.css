@@ -2,9 +2,9 @@
    sizes stay with their components; this file owns color, depth and surfaces. */
 :root {
   color-scheme: light;
-  --bg: #edf0f3;
-  --sidebar: rgba(255, 255, 255, .22);
-  --surface: rgba(255, 255, 255, .28);
+  --bg: #e7edf1;
+  --sidebar: linear-gradient(115deg, rgba(255, 255, 255, .30), rgba(255, 255, 255, .08));
+  --surface: rgba(255, 255, 255, .20);
   --text: #2e3242;
   --muted: #606679;
   --dim: #70778a;
@@ -12,7 +12,7 @@
   --line: rgba(79, 97, 124, .12);
   --hover: rgba(255, 255, 255, .38);
   --selected: rgba(132, 101, 193, .10);
-  --bot-bubble: rgba(255, 255, 255, .30);
+  --bot-bubble: rgba(255, 255, 255, .23);
   --own-bubble: rgba(170, 148, 217, .15);
   --brand-magenta: #ba397c;
   --brand-indigo: #7653b5;
@@ -22,10 +22,10 @@
   --session-accent: #7956b5;
   --session-on-accent: #fff;
   --glass-field: rgba(255, 255, 255, .23);
-  --glass-panel: linear-gradient(150deg, rgba(255, 255, 255, .23), rgba(255, 255, 255, .06)), rgba(248, 250, 254, .82);
-  --glass-shadow: 0 8px 28px rgba(45, 62, 89, .075), inset 0 1px 0 rgba(255, 255, 255, .74);
+  --glass-panel: linear-gradient(135deg, rgba(255, 255, 255, .38), rgba(255, 255, 255, .08) 55%, rgba(255, 255, 255, .19)), rgba(248, 250, 254, .48);
+  --glass-shadow: 0 10px 32px rgba(45, 62, 89, .09), 0 2px 7px rgba(45, 62, 89, .035), inset 0 1px 0 rgba(255, 255, 255, .92), inset 0 -1px 0 rgba(255, 255, 255, .24);
   --glass-popover-shadow: 0 22px 64px rgba(45, 62, 89, .15), 0 4px 14px rgba(45, 62, 89, .045), inset 0 1px 0 rgba(255, 255, 255, .84);
-  --glass-backdrop: blur(28px) saturate(125%);
+  --glass-backdrop: blur(22px) saturate(165%);
   background: var(--bg);
   color: var(--text);
 }
@@ -34,9 +34,9 @@
    adding a pattern, spotlight, or a separate decorative layer. */
 body {
   background:
-    linear-gradient(125deg, rgba(186, 173, 212, .19), transparent 44%),
-    linear-gradient(215deg, rgba(176, 207, 216, .20), transparent 57%),
-    linear-gradient(20deg, transparent 55%, rgba(217, 193, 208, .15)),
+    linear-gradient(125deg, rgba(175, 157, 208, .38), transparent 56%),
+    linear-gradient(215deg, rgba(144, 197, 209, .36), transparent 64%),
+    linear-gradient(20deg, transparent 55%, rgba(214, 172, 199, .30)),
     var(--bg);
   background-attachment: fixed;
 }
@@ -59,8 +59,8 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .startup-view { background: var(--bg); }
 .sidebar {
   background: var(--sidebar);
-  border-color: rgba(255, 255, 255, .42);
-  box-shadow: 4px 0 24px rgba(45, 62, 89, .025);
+  border-color: rgba(255, 255, 255, .65);
+  box-shadow: 5px 0 24px rgba(45, 62, 89, .045), inset -1px 0 0 rgba(255, 255, 255, .28);
   -webkit-backdrop-filter: var(--glass-backdrop);
   backdrop-filter: var(--glass-backdrop);
 }
@@ -90,7 +90,18 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .branch-path { opacity: .55; }
 .branch-node { fill: #f5f0fd; }
 .branch-row:hover { background: rgba(255, 255, 255, .30); }
-.branch-row.is-selected { background: #b799e226; box-shadow: inset 0 0 0 1px #a985d218; }
+
+.branch-row.is-open {
+  background: linear-gradient(120deg, rgba(255, 255, 255, .28), rgba(255, 255, 255, .06)), rgba(var(--pane-tint), .14);
+  box-shadow: inset 0 0 0 1px rgba(var(--pane-tint), .26), inset 0 1px 0 rgba(255, 255, 255, .65);
+}
+.branch-row.is-open:hover { background: rgba(var(--pane-tint), .20); }
+.branch-row.is-selected {
+  background: linear-gradient(120deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, .06)), rgba(var(--pane-tint), .23);
+  box-shadow: inset 3px 0 0 var(--session-color), inset 0 0 0 1px rgba(var(--pane-tint), .38), inset 0 1px 0 rgba(255, 255, 255, .72);
+}
+.branch-node.is-open { fill: var(--branch-color); stroke-width: 2; }
+.branch-node.is-open:not(.is-selected):not(.is-working) { fill-opacity: .45; }
 .branch-row .branch-row-copy strong { color: var(--session-color, var(--text)); }
 .branch-row.is-selected .branch-row-copy strong { color: var(--session-color, #694792); font-weight: 600; }
 .branch-row.is-ancestor .branch-row-copy { opacity: .72; }
@@ -108,8 +119,8 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .header-avatar { background: #b79bdf1c; color: var(--glass-accent); }
 .avatar-bot, .message .avatar-bot, .room-icon { background: transparent; color: var(--glass-accent); }
 .message-body > p, .message-copy {
-  border: 1px solid rgba(255, 255, 255, .46);
-  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, .62);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .30), 0 3px 14px rgba(45, 62, 89, .025);
 }
 .message-own .message-body > p { border-color: #d2bee941; }
 .message-system .message-body p { border-color: transparent; box-shadow: none; }
@@ -229,7 +240,7 @@ dialog::backdrop,
 }
 /* Conversation colors follow the input controls and the detached menus they open. */
 .room-view .composer {
-  background: linear-gradient(rgba(var(--pane-tint), .045), rgba(var(--pane-tint), .045)), rgba(255, 255, 255, .30);
+  background: linear-gradient(125deg, rgba(255, 255, 255, .40), rgba(255, 255, 255, .09) 50%, rgba(255, 255, 255, .22)), rgba(var(--pane-tint), .025);
 }
 .room-view .composer:focus-within {
   border-color: rgba(var(--pane-tint), .42);
@@ -255,7 +266,7 @@ dialog::backdrop,
 .room-view .send-button:hover { color: var(--session-on-accent); background: var(--session-accent); filter:brightness(.94); }
 .composer-picker, .context-popover, .quick-model-picker, .model-browser,
 .model-change-dialog, .bot-picker, .session-edit-dialog {
-  background: linear-gradient(rgba(var(--pane-tint), .075), rgba(var(--pane-tint), .075)), rgba(250, 251, 255, .91);
+  background: linear-gradient(rgba(var(--pane-tint), .035), rgba(var(--pane-tint), .035)), var(--glass-panel);
   border-color: rgba(255, 255, 255, .86);
 }
 .composer-picker .picker-option[aria-selected="true"],
@@ -337,12 +348,13 @@ dialog::backdrop,
 .pane-grid > .room-view { --pane-tint: 145, 119, 195; }
 .pane-grid[data-panes]:not([data-panes="1"]) > .room-view {
   --own-bubble: rgba(var(--pane-tint), .15);
-  background: rgba(var(--pane-tint), .055);
+  background: rgba(var(--pane-tint), .035);
   border-color: rgba(255, 255, 255, .30);
   border-radius: 0;
   box-shadow: none;
-  -webkit-backdrop-filter: blur(16px) saturate(115%);
-  backdrop-filter: blur(16px) saturate(115%);
+  /* Leave the continuous backdrop visible to the glass controls inside. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 .pane-bar { background: transparent; }
 .pane-bar h1, .pane-bar h2 { color: var(--session-color, var(--text)); }
@@ -464,7 +476,7 @@ dialog::backdrop,
 .workspace-browser-help { background: #faf8fff0; color: var(--muted); border-color: var(--line); }
 
 @media (max-width: 720px) {
-  .sidebar { background: rgba(248, 250, 254, .42); }
+  .sidebar { background: linear-gradient(115deg, rgba(255, 255, 255, .48), rgba(248, 250, 254, .32)); }
 }
 @media (max-width: 420px) {
   .auth-panel { padding: 26px 22px; }
@@ -514,7 +526,7 @@ dialog::backdrop,
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-.branch-row.is-selected { background:rgba(var(--pane-tint,145,119,195),.12); box-shadow:inset 0 0 0 1px rgba(var(--pane-tint,145,119,195),.15); }
+
 .branch-current { color:var(--session-color,var(--muted)); }
 .pane-grid[data-panes="1"] > .room-view,
 .pane-grid.docked[data-panes="1"] > .room-view.is-focus {
