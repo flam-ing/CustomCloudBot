@@ -283,7 +283,7 @@ dialog::backdrop,
 .quick-model-option:hover, .quick-model-option:focus-visible, .bot-option:hover { background: rgba(var(--pane-tint), .10); }
 .bot-option input { accent-color: var(--session-color, var(--glass-accent-strong)); }
 .model-card[aria-pressed="true"] { background: rgba(var(--pane-tint), .10); border-color: var(--session-color, var(--glass-accent-strong)); }
-.session-edit-dialog input[type="text"], .session-color-custom input[type="color"] {
+.session-edit-dialog input[type="text"], .session-color-details input {
   color: var(--text); background: rgba(255, 255, 255, .60); border-color: rgba(var(--pane-tint), .24);
 }
 .session-edit-actions button { color: var(--session-color, var(--glass-accent-strong)); background: rgba(var(--pane-tint), .09); }
@@ -413,10 +413,21 @@ dialog::backdrop,
 .voice-call-transcript, .voice-call-note { color: var(--muted); }
 .sidebar-dialog button { color: var(--text); background: #a788cd0e; }
 .sidebar-dialog button:hover:not(:disabled) { background: var(--hover); }
-.session-edit-dialog .session-color-palette > button,
-.session-edit-dialog .session-color-palette > button:hover:not(:disabled) {
+.session-edit-dialog .session-color-palette > .session-color-swatch,
+.session-edit-dialog .session-color-palette > .session-color-swatch:hover:not(:disabled) {
   color:var(--session-on-accent); background:var(--swatch-color,var(--session-accent));
 }
+.session-edit-dialog .session-color-palette > .session-color-spectrum,
+.session-edit-dialog .session-color-palette > .session-color-spectrum:hover:not(:disabled) {
+  background:radial-gradient(circle at 28% 25%,#ffffff80,transparent 55%),conic-gradient(#f36a83,#eab751,#74c767,#4fc5d9,#6c7be5,#ba6cdb,#f36a83);
+}
+.session-edit-dialog .session-color-palette > .session-color-shuffle {
+  color:var(--session-color); background:var(--glass-reflection),rgba(255,255,255,.26);
+}
+.session-edit-dialog .session-color-palette > .session-color-shuffle:hover:not(:disabled) { background:rgba(var(--pane-tint),.12); }
+.session-edit-dialog .session-color-reset { color:var(--muted); background:transparent; }
+.session-edit-dialog .session-color-reset[aria-pressed="true"] { color:var(--session-color); background:rgba(var(--pane-tint),.08); }
+.session-color-details input[aria-invalid="true"] { border-color:#aa3b60; }
 .session-edit-dialog .session-edit-actions button { color:var(--session-color,var(--glass-accent-strong)); background:rgba(var(--pane-tint),.09); }
 .session-edit-dialog .session-edit-actions button:last-child { color:var(--session-on-accent); background:var(--session-accent); }
 .sidebar-dialog-actions button[type="submit"],

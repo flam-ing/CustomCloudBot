@@ -15,6 +15,7 @@ import { createRoomSharing } from "/room-sharing.js";
 import { mergePendingMessages, failedOutcome } from "/conversation-ui.mjs";
 import { layoutBranches, branchGraphGeometry, branchDisplayName } from "/branch-graph.mjs";
 import { sessionColors } from "/session-colors.js";
+import { createSessionColorPicker, rgbToHex } from "/session-color-picker.mjs";
 import { createRoutineUI } from "/routines.js";
 import { createVoiceCall } from "/voice-call.js";
 import { createMessageQueue } from "/message-queue.js";
@@ -626,18 +627,16 @@ function openSessionColor(roomId) {
   const room=state.rooms.find(item=>item.id===roomId);if(!room||room.id===MONITOR_ROOM)return;
   const userId=state.session?.user?.id,epoch=sidebarEpoch,dialog=sidebarDialog("대화 색상");dialog.classList.add("session-edit-dialog");
   let choice=room.color||null;
-  const palette=contextElement("div",undefined,"session-color-palette"),custom=contextElement("label","직접 선택","session-color-custom"),input=contextElement("input"),message=contextElement("p",undefined,"form-message"),actions=contextElement("div",undefined,"session-edit-actions");
-  palette.setAttribute("role","group");palette.setAttribute("aria-label","대화 색상 선택");input.type="color";input.value=choice||"#8c65c1";input.setAttribute("aria-label","직접 색상 선택");custom.append(input);message.setAttribute("role","alert");
-  const preview=()=>{paintSession(dialog,sessionColors(state.rooms.map(item=>item.id===roomId?{...item,color:choice}:item),state.forks).get(roomId));for(const button of $$("button",palette))button.setAttribute("aria-pressed",String(button.dataset.color===(choice||"")));};
-  for(const [color,label] of [[null,"자동 색상"],["#9064c2","라벤더"],["#c85b91","로즈"],["#b86c43","살구"],["#9a8539","골드"],["#478c70","그린"],["#367f99","틸"],["#5379c2","블루"],["#747780","그레이"]]) {
-    const button=contextElement("button",color?undefined:"자동");button.type="button";button.dataset.color=color||"";button.setAttribute("aria-label",label);button.title=label;if(color)button.style.setProperty("--swatch-color",color);button.onclick=()=>{choice=color;if(color)input.value=color;preview();};palette.append(button);
-  }
-  input.oninput=()=>{choice=input.value;preview();};
+  const automatic=sessionColors(state.rooms.map(item=>item.id===roomId?{...item,color:null}:item),state.forks).get(roomId);
+  const message=contextElement("p",undefined,"form-message"),actions=contextElement("div",undefined,"session-edit-actions");
+  message.setAttribute("role","alert");
+  const preview=()=>paintSession(dialog,sessionColors(state.rooms.map(item=>item.id===roomId?{...item,color:choice}:item),state.forks).get(roomId));
+  const picker=createSessionColorPicker({value:choice,automaticColor:rgbToHex(automatic?.tint.split(",").map(Number)),onChange:color=>{choice=color;preview();}});
   const cancel=contextElement("button","취소"),save=contextElement("button","저장");cancel.type=save.type="button";cancel.onclick=()=>dialog.close();save.onclick=async()=>{
-    if(save.disabled||state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;
+    if(save.disabled||state.session?.user?.id!==userId||sidebarEpoch!==epoch||!picker.reportValidity())return;
     save.disabled=true;
     if(await updateRoomListPreference(room,{color:choice})){if(dialog.isConnected)dialog.close();}else{save.disabled=false;message.textContent="색상을 저장하지 못했습니다. 다시 시도해주세요.";}
-  };actions.append(cancel,save);dialog.append(palette,custom,contextElement("p","내 화면에만 적용됩니다. 자동으로 되돌리면 가지의 색 계열을 따라갑니다.","session-edit-note"),message,actions);preview();dialog.showModal();
+  };actions.append(cancel,save);dialog.append(picker.element,contextElement("p","내 화면에만 적용됩니다. 자동 색상은 가지의 색 계열을 따라갑니다.","session-edit-note"),message,actions);preview();dialog.showModal();
 }
 function openSessionActions(roomId, trigger) {
   const room = state.rooms.find(item => item.id === roomId);

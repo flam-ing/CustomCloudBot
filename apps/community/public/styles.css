@@ -1647,18 +1647,32 @@ button:active .agent-art { transform:scale(.94); }
 .session-edit-dialog { box-sizing:border-box; width:min(360px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:22px; border:1px solid var(--line); border-radius:20px; color:var(--text); }
 .session-edit-dialog form { display:grid; gap:16px; }
 .session-edit-dialog h2 { margin:0; font-size:17px; }
-.session-edit-dialog > :is(form,.session-color-palette,.session-color-custom,.session-edit-note,.session-edit-actions) { margin-top:16px; }
+.session-edit-dialog > :is(form,.session-color-picker,.session-edit-note,.session-edit-actions) { margin-top:16px; }
 .session-edit-dialog .form-message:empty { display:none; }
 .session-edit-dialog label { display:grid; gap:8px; min-width:0; font-size:13px; }
 .session-edit-dialog input[type="text"] { box-sizing:border-box; width:100%; min-width:0; min-height:42px; padding:10px 12px; border:1px solid var(--line); border-radius:11px; font:inherit; }
 .session-edit-note { margin:0; font-size:12px; line-height:1.6; color:var(--muted); }
 .session-edit-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
 .session-edit-actions button { width:auto; min-width:66px; min-height:40px; margin:0; padding:8px 16px; border:0; border-radius:11px; font:inherit; font-size:13px; text-align:center; }
-.session-color-palette { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:5px; }
-.session-color-palette > button { flex:none; width:34px; height:34px; margin:0; padding:0; border:2px solid #ffffffb3; border-radius:50%; background:var(--swatch-color,var(--session-accent)); box-shadow:0 1px 4px #2734531a; font-size:10px; text-align:center; }
+.session-color-palette { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); align-items:center; gap:7px; padding:5px 3px; }
+.session-edit-dialog .session-color-palette > button { display:grid; place-items:center; width:100%; aspect-ratio:1; height:auto; margin:0; padding:0; border:2px solid #ffffffb3; border-radius:50%; box-shadow:0 1px 4px #2734531a; text-align:center; cursor:pointer; }
 .session-color-palette > button[aria-pressed="true"] { outline:2px solid var(--session-color,var(--glass-accent)); outline-offset:3px; }
-.session-edit-dialog .session-color-custom { display:flex; align-items:center; gap:12px; font-size:13px; }
-.session-color-custom input[type="color"] { flex:none; width:42px; height:36px; padding:3px; border:1px solid var(--line); border-radius:9px; cursor:pointer; }
+.session-color-shuffle svg { width:19px; height:19px; }
+.session-color-summary { display:flex; align-items:center; gap:8px; margin-top:17px; min-height:32px; }
+.session-color-sample { flex:none; width:18px; height:18px; border:1px solid #78879c40; border-radius:50%; }
+.session-color-value { color:var(--muted); font:12px ui-monospace,SFMono-Regular,monospace; }
+.session-edit-dialog .session-color-reset { width:auto; flex:none; margin:0 0 0 auto; padding:7px 9px; font-size:11px; border-radius:9px; }
+.session-color-details { margin-top:15px; padding-top:15px; border-top:1px solid var(--line); }
+.session-color-details[hidden] { display:none; }
+.session-color-exact { display:grid; grid-template-columns:48px minmax(0,1fr); align-items:end; gap:12px; }
+.session-color-rgb { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.session-edit-dialog .session-color-field { gap:6px; font-size:11px; }
+.session-color-details input { font:13px ui-monospace,SFMono-Regular,monospace; }
+.session-edit-dialog input.session-color-native { width:48px; height:42px; padding:3px; border-radius:10px; cursor:pointer; }
+.session-color-native::-webkit-color-swatch-wrapper { padding:0; }
+.session-color-native::-webkit-color-swatch { border:0; border-radius:6px; }
+.session-color-native::-moz-color-swatch { border:0; border-radius:6px; }
+.session-color-hint { margin:10px 0 0; font-size:11px; line-height:1.5; color:var(--muted); }
 @keyframes composer-picker-in { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
 @media(pointer:coarse) {
   .session-drag-handle { display:flex; }
