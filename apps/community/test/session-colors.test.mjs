@@ -107,3 +107,39 @@ test('sibling forks have distinct hues and new later forks do not recolor earlie
   const updated = sessionColors([{...room('earlier-alphabetic-id'), createdAt: 99}, ...rooms], [{id: 'earlier-alphabetic-id', parent: 'root'}, ...forks]);
   for (const id of initial.keys()) assert.deepEqual(updated.get(id), initial.get(id));
 });
+
+test('saved colors preserve exact accents with legible text and reset to the automatic palette', () => {
+  const automatic=sessionColors([room('chosen')]).get('chosen');
+  const selected=sessionColors([{...room('chosen'),color:'#aBcDeF'}]).get('chosen');
+  assert.equal(selected.accent,'#abcdef');assert.equal(selected.tint,'171, 205, 239');assert.equal(selected.hue,210);
+  assert.equal(selected.foreground,'#000000');assert.notEqual(selected.color,selected.accent,'pale accents still have a dark text variant');
+  for(const color of [null,undefined,'red','#abc','#12345678','var(--bad)',{}])assert.deepEqual(sessionColors([{...room('chosen'),color}]).get('chosen'),automatic);
+  assert.equal(sessionColors([{...room('chosen'),color:'#000000'}]).get('chosen').foreground,'#ffffff');
+  assert.equal(sessionColors([{...room('chosen'),color:'#ffffff'}]).get('chosen').foreground,'#000000');
+});
+
+test('custom colors anchor related fork families without recoloring siblings or unrelated roots', () => {
+  const rooms=['root','a','b','c','aa','aaa','unrelated'].map((id,index)=>({...room(id),createdAt:index}));
+  const forks=[{id:'a',parent:'root'},{id:'b',parent:'root'},{id:'c',parent:'root'},{id:'aa',parent:'a'},{id:'aaa',parent:'aa'}];
+  const before=sessionColors(rooms,forks);
+  const customRooms=rooms.map(value=>({...value,...(value.id==='a'?{color:'#00cc66'}:{})}));
+  const after=sessionColors(customRooms,forks);
+  assert.deepEqual(sessionColors([...customRooms].reverse(),[...forks].reverse()),after);
+  assert.equal(after.get('a').accent,'#00cc66');assert.equal(after.get('a').hue,150);
+  for(const id of ['root','b','c','unrelated'])assert.deepEqual(after.get(id),before.get(id));
+  for(const id of ['aa','aaa'])assert.ok(distance(after.get(id).hue,150)<=48);
+  assert.ok(distance(after.get('aa').hue,after.get('a').hue)>=24);
+  const gray=sessionColors(rooms.map(value=>({...value,...(value.id==='root'?{color:'#808080'}:{})})),forks);
+  for(const id of ['a','aa','aaa'])assert.equal(new Set(gray.get(id).tint.split(', ')).size,1,'neutral parent colors keep neutral descendants');
+});
+
+test('custom and automatic button foregrounds meet 4.5:1 contrast across the RGB cube', () => {
+  const luminance=channels=>channels.map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4).reduce((sum,value,index)=>sum+value*[0.2126,0.7152,0.0722][index],0);
+  const rooms=[];
+  for(let r=0;r<=255;r+=17)for(let g=0;g<=255;g+=17)for(let b=0;b<=255;b+=17)rooms.push({id:`rgb-${r}-${g}-${b}`,color:'#'+[r,g,b].map(value=>value.toString(16).padStart(2,'0')).join('')});
+  for(const {tint,foreground} of [...sessionColors(rooms).values(),...sessionColors(rooms.map(({id})=>({id}))).values()]) {
+    const background=luminance(tint.split(', ').map(value=>Number(value)/255));
+    const contrast=foreground==='#ffffff'?1.05/(background+0.05):(background+0.05)/0.05;
+    assert.ok(contrast>=4.5,`${tint} with ${foreground}`);
+  }
+});

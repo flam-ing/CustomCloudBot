@@ -1,4 +1,5 @@
 const MONITOR_ROOM = "00000000-0000-4000-8000-000000000001";
+import { createComposerRecorder } from "/composer-recorder.mjs";
 import { renderMessageText } from "/message-format.mjs";
 import { renderTranscript, disposeTranscript } from "/transcript.mjs";
 import { recommendedModels, modelLabel, filterModels } from "/model-picker.mjs";
@@ -39,9 +40,6 @@ const state = {
   pendingSend: null,
   roomRequest: 0,
   pendingAttachments: [],
-  recording: null,
-  recordingPending: false,
-  recordingCancelled: false,
   attachmentGeneration: 0,
   layout: 1,
   extra: [],
@@ -589,10 +587,59 @@ function confirmRemoveConversation(room) {
   const buttons = contextElement("div", undefined, "session-delete-actions"); buttons.append(cancel, confirm);
   dialog.append(title, text, buttons); dialog.onclose = () => dialog.remove(); document.body.append(dialog); dialog.showModal(); cancel.focus();
 }
+function bindSessionTitle(element,getRoomId) {
+  element.classList.add("session-title");element.setAttribute("role","button");element.tabIndex=0;
+  element.title="클릭하여 제목 변경";
+  const open=()=>openSessionRename(getRoomId());
+  element.addEventListener("click",open);
+  element.addEventListener("keydown",event=>{if(["Enter"," "].includes(event.key)){event.preventDefault();open();}});
+}
+function openSessionRename(roomId) {
+  const room=state.rooms.find(item=>item.id===roomId);if(!room||room.id===MONITOR_ROOM)return;
+  if(room.role!=="owner"){toast("대화 소유자만 제목을 변경할 수 있어요.");return;}
+  const userId=state.session?.user?.id,epoch=sidebarEpoch,dialog=sidebarDialog("대화 제목 변경");dialog.classList.add("session-edit-dialog");
+  paintSession(dialog,sessionColors(state.rooms,state.forks).get(roomId));
+  const form=contextElement("form"),label=contextElement("label","제목"),input=contextElement("input"),message=contextElement("p",undefined,"form-message"),actions=contextElement("div",undefined,"session-edit-actions");
+  input.type="text";input.required=true;input.maxLength=80;input.value=room.name;input.autocomplete="off";label.append(input);message.setAttribute("role","alert");
+  const cancel=contextElement("button","취소"),save=contextElement("button","저장");cancel.type="button";save.type="submit";cancel.onclick=()=>dialog.close();actions.append(cancel,save);form.append(label,message,actions);dialog.append(form);
+  form.onsubmit=async event=>{
+    event.preventDefault();if(save.disabled||state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;
+    const name=input.value.trim();if(!name){message.textContent="제목을 입력해주세요.";input.focus();return;}
+    setBusy(save,true,"저장 중…");
+    try {
+      const result=await api(`/api/rooms/${encodeURIComponent(roomId)}`,{method:"PATCH",body:JSON.stringify({name})});
+      if(state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;
+      const current=state.rooms.find(item=>item.id===roomId);if(current)Object.assign(current,result.room);
+      if(state.selectedRoom===roomId){els.roomTitle.textContent=result.room.name;if(state.roomData?.room)state.roomData.room.name=result.room.name;}
+      state.extra.forEach((pane,index)=>{if(pane.roomId===roomId){if(pane.data?.room)pane.data.room.name=result.room.name;const title=$("h2",$$(".extra-pane")[index]);if(title)title.textContent=result.room.name;}});
+      renderRooms();dialog.close();
+    }catch(error){if(dialog.isConnected)message.textContent=error.message;}finally{setBusy(save,false);}
+  };
+  dialog.showModal();input.focus();input.select();
+}
+function openSessionColor(roomId) {
+  const room=state.rooms.find(item=>item.id===roomId);if(!room||room.id===MONITOR_ROOM)return;
+  const userId=state.session?.user?.id,epoch=sidebarEpoch,dialog=sidebarDialog("대화 색상");dialog.classList.add("session-edit-dialog");
+  let choice=room.color||null;
+  const palette=contextElement("div",undefined,"session-color-palette"),custom=contextElement("label","직접 선택","session-color-custom"),input=contextElement("input"),message=contextElement("p",undefined,"form-message"),actions=contextElement("div",undefined,"session-edit-actions");
+  palette.setAttribute("role","group");palette.setAttribute("aria-label","대화 색상 선택");input.type="color";input.value=choice||"#8c65c1";input.setAttribute("aria-label","직접 색상 선택");custom.append(input);message.setAttribute("role","alert");
+  const preview=()=>{paintSession(dialog,sessionColors(state.rooms.map(item=>item.id===roomId?{...item,color:choice}:item),state.forks).get(roomId));for(const button of $$("button",palette))button.setAttribute("aria-pressed",String(button.dataset.color===(choice||"")));};
+  for(const [color,label] of [[null,"자동 색상"],["#9064c2","라벤더"],["#c85b91","로즈"],["#b86c43","살구"],["#9a8539","골드"],["#478c70","그린"],["#367f99","틸"],["#5379c2","블루"],["#747780","그레이"]]) {
+    const button=contextElement("button",color?undefined:"자동");button.type="button";button.dataset.color=color||"";button.setAttribute("aria-label",label);button.title=label;if(color)button.style.setProperty("--swatch-color",color);button.onclick=()=>{choice=color;if(color)input.value=color;preview();};palette.append(button);
+  }
+  input.oninput=()=>{choice=input.value;preview();};
+  const cancel=contextElement("button","취소"),save=contextElement("button","저장");cancel.type=save.type="button";cancel.onclick=()=>dialog.close();save.onclick=async()=>{
+    if(save.disabled||state.session?.user?.id!==userId||sidebarEpoch!==epoch)return;
+    save.disabled=true;
+    if(await updateRoomListPreference(room,{color:choice})){if(dialog.isConnected)dialog.close();}else{save.disabled=false;message.textContent="색상을 저장하지 못했습니다. 다시 시도해주세요.";}
+  };actions.append(cancel,save);dialog.append(palette,custom,contextElement("p","내 화면에만 적용됩니다. 자동으로 되돌리면 가지의 색 계열을 따라갑니다.","session-edit-note"),message,actions);preview();dialog.showModal();
+}
 function openSessionActions(roomId, trigger) {
   const room = state.rooms.find(item => item.id === roomId);
   if (!room || room.id === MONITOR_ROOM) return;
   openComposerPicker(trigger, "대화 메뉴", [
+    ...(room.role==="owner"?[{label:"제목 변경",select:()=>openSessionRename(room.id)}]:[]),
+    {label:"색상 변경",detail:"내 화면의 대화 색상",select:()=>openSessionColor(room.id)},
     {label:room.pinned ? "고정 해제" : "상단에 고정", detail:"내 대화 목록", select:() => void updateRoomListPreference(room, {pinned:!room.pinned})},
     {label:room.archived ? "대화 복원" : "대화 삭제", danger:!room.archived, select:() => confirmRemoveConversation(room)},
   ]);
@@ -624,12 +671,19 @@ function branchSvg(tag, attributes = {}) {
 }
 function paintSession(element, color) {
   if (!element) return;
-  if (color) { element.style.setProperty("--pane-tint", color.tint); element.style.setProperty("--session-color", color.color); }
-  else { element.style.removeProperty("--pane-tint"); element.style.removeProperty("--session-color"); }
+  const tokens={"--pane-tint":color?.tint,"--session-color":color?.color,"--session-accent":color?.accent,"--session-on-accent":color?.foreground};
+  for(const [key,value] of Object.entries(tokens)) {if(value)element.style.setProperty(key,value);else element.style.removeProperty(key);}
+}
+function inheritSessionTheme(element,trigger) {
+  const style=getComputedStyle(trigger);
+  for(const token of ["--pane-tint","--session-color","--session-accent","--session-on-accent"]) {
+    const value=style.getPropertyValue(token).trim();if(value)element.style.setProperty(token,value);else element.style.removeProperty(token);
+  }
 }
 function syncSessionColors(colors = sessionColors(state.rooms, state.forks)) {
   dockPanels().forEach((panel, index) => paintSession(panel, colors.get(dockRoomAt(index))));
   paintSession($("#branch-current"), colors.get(currentBranchId()));
+  paintSession($(".topbar"),colors.get(state.selectedRoom));
 }
 function renderRooms() {
   const focus = els.roomList.contains(document.activeElement) ? {roomId: document.activeElement.dataset.roomId, action: document.activeElement.dataset.branchAction} : null;
@@ -698,6 +752,8 @@ function openArchivedConversations() {
   dialog.addEventListener("close", () => { dialog.remove(); $("#profile-customize").focus(); }); document.body.append(dialog); dialog.showModal();
 }
 function showEmpty() {
+  cancelActiveRecording();
+  closeBotPickers();
   disposeTranscript(els.messages);
   closeComposerPicker();
   clearPendingAttachments();
@@ -1241,8 +1297,7 @@ function discardPendingMessage(message, roomId) {
   if (message.retrying || message.pending !== "failed" || pendingMessages.get(roomId) !== message) return;
   pendingMessages.delete(roomId); paintPending(roomId);
 }
-function renderBotPicker() {
-  const picker = $("#bot-picker");
+function renderBotPicker(picker = $("#bot-picker")) {
   picker.replaceChildren();
   if (!state.bots.length) {
     const note = document.createElement("span");
@@ -1290,11 +1345,7 @@ function clearPendingAttachments(pane = null) {
   clearAttachmentDraft(pane || state);
   renderPendingAttachments(pane);
 }
-function cancelActiveRecording() {
-  if (!state.recording) return;
-  state.recordingCancelled = true;
-  try { state.recording.stop(); } catch {}
-}
+function cancelActiveRecording() { composerRecorder?.cancel(); }
 function renderPendingAttachments(pane = null) {
   const owner = pane || state;
   const section = pane ? $$(".extra-pane")[state.extra.indexOf(pane)] : null;
@@ -1334,13 +1385,13 @@ function renderPendingAttachments(pane = null) {
     list.append(card);
   });
 }
-async function uploadAttachments(files, pane = null) {
+async function uploadAttachments(files, pane = null, signal = null) {
   if (composerBlocked(pane)) return;
   const owner = pane || state;
   const roomId = pane ? pane.roomId : state.selectedRoom;
   const userId = state.session?.user?.id;
   return uploadAttachmentFiles({
-    files, owner, roomId,
+    files, owner, roomId, signal,
     isCurrent: () => !!userId && state.session?.user?.id === userId &&
       (pane ? state.extra.includes(pane) && pane.roomId === roomId : state.selectedRoom === roomId),
     changed: () => renderPendingAttachments(pane),
@@ -1355,104 +1406,68 @@ async function uploadAttachments(files, pane = null) {
 function pasteAttachments(event, pane = null) {
   pasteComposerImages(event, { enabled: !composerBlocked(pane), upload: files => uploadAttachments(files, pane) });
 }
-async function toggleRecording() {
-  if (voiceUI?.roomId) { toast("통화가 끝난 뒤 녹음을 첨부할 수 있어요."); return; }
-  const button = $("#record-button");
-  if (state.recordingPending) return;
-  if (state.recording) {
-    state.recording.stop();
-    button.disabled = true;
-    button.textContent = "처리 중…";
-    return;
+let composerRecorder;
+function recordingCurrent(context) {
+  const owner=context.pane||state;
+  return contextOwnerCurrent(context.roomId,context.userId,context.pane) &&
+    context.csrfToken===state.session?.csrfToken && owner.attachmentGeneration===context.attachmentGeneration;
+}
+function recordingBlocksSend(pane=null) {
+  if(composerRecorder?.context?.pane!==pane||composerRecorder.status==="idle")return false;
+  toast("녹음을 마치거나 취소한 뒤 보내주세요.");return true;
+}
+function syncRecordingButtons() {
+  for(const button of $$(".record-button")) {
+    const pane=button._pane||null, active=composerRecorder?.context?.pane===pane && composerRecorder.status!=="idle";
+    const status=active?composerRecorder.status:"idle";
+    button.classList.toggle("is-recording",status==="recording");
+    button.disabled=status==="requesting"||status==="stopping"||status==="uploading"||(!active&&!!composerBlocked(pane));
+    const label=status==="recording"?"음성 녹음 중지":status==="requesting"?"마이크 권한 확인 중":status==="stopping"||status==="uploading"?"녹음 첨부 중":"음성 녹음 시작";
+    button.setAttribute("aria-label",label);button.title=label;
+    const cancel=$(".record-cancel-button",button.closest("form"));if(cancel)cancel.hidden=!active;
   }
-  if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
-    toast("이 브라우저에서는 음성 녹음을 사용할 수 없어요. 음성 파일을 첨부해주세요.");
-    return;
-  }
-  const roomId = state.selectedRoom;
-  const attachmentGeneration = state.attachmentGeneration;
-  state.recordingPending = true;
-  button.disabled = true;
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (error) {
-    state.recordingPending = false;
-    button.disabled = false;
-    toast(error?.name === "NotAllowedError" ? "마이크 권한이 필요합니다." : "마이크를 사용할 수 없습니다.");
-    return;
-  }
-  if (roomId !== state.selectedRoom || attachmentGeneration !== state.attachmentGeneration) {
-    stream.getTracks().forEach((track) => track.stop());
-    state.recordingPending = false;
-    button.disabled = false;
-    return;
-  }
-  const chunks = [];
-  let recordedBytes = 0;
-  let tooLarge = false;
-  let recorder;
-  const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus", "audio/webm"].find((type) => MediaRecorder.isTypeSupported?.(type));
-  try { recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); } catch {
-    stream.getTracks().forEach((track) => track.stop());
-    state.recordingPending = false;
-    button.disabled = false;
-    toast("이 브라우저에서 지원하는 녹음 형식이 없습니다.");
-    return;
-  }
-  state.recording = recorder;
-  state.recordingPending = false;
-  state.recordingCancelled = false;
-  button.classList.add("is-recording");
-  $("#record-cancel-button").hidden = false;
-  button.setAttribute("aria-label", "음성 녹음 중지");
-  button.title = "녹음 중지";
-  recorder.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
-  recorder.addEventListener("dataavailable", (event) => {
-    recordedBytes += event.data.size;
-    if (recordedBytes > 12 * 1024 * 1024 && recorder.state === "recording") {
-      tooLarge = true;
-      state.recordingCancelled = true;
-      recorder.stop();
-      toast("녹음이 12MB에 도달해 중지되었습니다.");
-    }
+}
+function toggleRecording(pane=null) {
+  if(voiceUI?.roomId){toast("통화가 끝난 뒤 녹음을 첨부할 수 있어요.");return;}
+  if(!composerRecorder)composerRecorder=createComposerRecorder({
+    isCurrent:recordingCurrent,upload:(files,context,{signal})=>uploadAttachments(files,context.pane,signal),onState:syncRecordingButtons,notify:toast,
   });
-  recorder.addEventListener("error", () => {
-    state.recordingCancelled = true;
-    tooLarge = false;
-    stream.getTracks().forEach((track) => track.stop());
-    toast("음성 녹음 중 오류가 발생했습니다.");
-    if (recorder.state === "recording") {
-      try { recorder.stop(); } catch {}
-    }
-  });
-  recorder.addEventListener("stop", async () => {
-    clearTimeout(recorder.timeout);
-    stream.getTracks().forEach((track) => track.stop());
-    state.recording = null;
-    const cancelled = state.recordingCancelled;
-    state.recordingCancelled = false;
-    $("#record-cancel-button").hidden = true;
-    button.disabled = false;
-    button.classList.remove("is-recording");
-    button.textContent = "";
-    button.append(icon("mic"));
-    button.setAttribute("aria-label", "음성 녹음 시작");
-    button.title = "음성 녹음";
-    if (cancelled || tooLarge || !chunks.length) return;
-    if (roomId !== state.selectedRoom || attachmentGeneration !== state.attachmentGeneration) return;
-    const extension = recorder.mimeType.includes("mp4") ? "mp4" : recorder.mimeType.includes("ogg") ? "ogg" : "webm";
-    await uploadAttachments([new File([new Blob(chunks, { type: recorder.mimeType })], `voice-${Date.now()}.${extension}`, { type: recorder.mimeType })]);
-  });
-  recorder.start(1000);
-  button.disabled = false;
-  recorder.timeout = setTimeout(() => {
-    if (recorder.state === "recording") {
-      recorder.stop();
-      toast("녹음은 최대 120초까지 가능합니다.");
-    }
-  }, 120000);
-  toast("녹음 중… 다시 눌러 녹음을 첨부합니다.");
+  if(composerRecorder.status!=="idle") {
+    if(composerRecorder.context.pane===pane)void composerRecorder.stop();
+    else toast("다른 입력창의 녹음을 먼저 마쳐주세요.");
+    return;
+  }
+  if(composerBlocked(pane))return;
+  const owner=pane||state;
+  void composerRecorder.start({pane,roomId:pane?pane.roomId:state.selectedRoom,userId:state.session?.user?.id,csrfToken:state.session?.csrfToken,attachmentGeneration:owner.attachmentGeneration});
+}
+let activeBotPicker=null;
+function closeBotPickers() {
+  const open=activeBotPicker;activeBotPicker=null;
+  if(open) {
+    window.removeEventListener("resize",open.position);window.removeEventListener("scroll",open.position,true);
+    try{if(open.picker.matches(":popover-open"))open.picker.hidePopover();}catch{}
+    open.picker.removeAttribute("popover");open.picker.classList.remove("is-floating");open.picker.style.left="";open.picker.style.top="";
+    open.parent.append(open.picker);
+  }
+  for(const picker of $$(".bot-picker"))picker.classList.add("is-hidden");
+  for(const trigger of $$(".bot-selector-trigger"))trigger.setAttribute("aria-expanded","false");
+}
+function toggleBotPicker(trigger,picker) {
+  const opening=picker.classList.contains("is-hidden");closeBotPickers();closeComposerPicker();closeContextPopover();
+  if(!opening)return;
+  const parent=picker.parentElement;renderBotPicker(picker);inheritSessionTheme(picker,trigger);
+  picker.classList.remove("is-hidden");picker.classList.add("is-floating");trigger.setAttribute("aria-expanded","true");
+  const position=()=>{
+    if(!trigger.isConnected){closeBotPickers();return;}
+    const rect=trigger.getBoundingClientRect(),width=picker.offsetWidth,height=picker.offsetHeight;
+    picker.style.left=Math.max(12,Math.min(rect.left,innerWidth-width-12))+"px";
+    picker.style.top=Math.max(12,Math.min(rect.top-height-8,innerHeight-height-12))+"px";
+  };
+  activeBotPicker={trigger,picker,parent,position};
+  document.body.append(picker);
+  if(typeof picker.showPopover==="function") {picker.setAttribute("popover","auto");picker.showPopover();picker.ontoggle=event=>{if(event.newState==="closed"&&activeBotPicker?.picker===picker)closeBotPickers();};}
+  position();window.addEventListener("resize",position);window.addEventListener("scroll",position,true);
 }
 function topicChoiceDialog() {
   return new Promise(resolve=>{
@@ -1503,7 +1518,7 @@ async function offerTopicChoice(pane,draft) {
 }
 async function submitMessage(event, skipTopic = false) {
   event.preventDefault();
-  if (composerBlocked()) return;
+  if (composerBlocked() || recordingBlocksSend()) return;
   const sendSession = state.session;
   const sendCurrent = () => state.session?.user?.id === sendSession?.user?.id && state.session?.csrfToken === sendSession?.csrfToken;
   const input = $("#message-input"),
@@ -1741,7 +1756,7 @@ function contextElement(tag, text, className) {
 }
 function renderContextMeter(context, form = $("#composer-form"), pane = null) {
   if(!form)return;
-  const toolbar=$(".composer-tools",form);
+  const toolbar=$(".model-controls",form);
   if(!toolbar)return;
   let bar=$(".context-controls",form);
   if(!bar) {
@@ -1838,7 +1853,7 @@ function renderUsageSection(section, usage) {
 }
 async function openContextPopover(trigger,pane) {
   if(contextPopover?.trigger===trigger){closeContextPopover();return;}
-  closeContextPopover();
+  closeContextPopover();closeBotPickers();closeComposerPicker();
   const {roomId,data}=roomContextOwner(pane),userId=state.session?.user?.id;if(!roomId)return;
   const native=typeof HTMLElement.prototype.showPopover==="function";
   const element=contextElement(native?"div":"dialog",undefined,"context-popover");element.setAttribute("role","dialog");element.setAttribute("aria-label","컨텍스트 및 API 사용량");if(native)element.setAttribute("popover","auto");
@@ -1848,6 +1863,7 @@ async function openContextPopover(trigger,pane) {
   const owner=roomContextOwner(pane);compact.disabled=owner.busy||!owner.canManage||!(data?.context?.usedChars>=500);
   compact.title=owner.canManage ? "기록을 보존하고 다음 요청에 담을 맥락을 줄입니다" : "대화 소유자만 압축할 수 있습니다";
   compact.onclick=()=>sessionAction("compact",pane,compact);
+  inheritSessionTheme(element,trigger);
   element.append(header,contextSection,compact,usageSection);document.body.append(element);
   const open={element,trigger,roomId,pane,userId,native,contextSection,compact,cancelled:false,abort:new AbortController()};
   open.position=()=>{
@@ -1948,6 +1964,7 @@ function composerBlocked(pane = null) {
   return !roomId || roomId === MONITOR_ROOM || (pane ? pane.sending : state.sending) || pendingMessages.get(roomId)?.retrying || modelChanges.has(roomId) || branchOperations.has(roomId);
 }
 function updateModelAvailability() {
+  syncRecordingButtons();
   updateBranchControls();
   syncSessionActivity();
   updateAgentPresence();
@@ -2057,8 +2074,9 @@ function closeComposerPicker(restoreFocus=false) {
 }
 function openComposerPicker(trigger,title,options,{after}={}) {
   if(composerPicker?.trigger===trigger){closeComposerPicker(true);return;}
-  closeComposerPicker();
+  closeComposerPicker();closeBotPickers();closeContextPopover();
   const element=contextElement("div",undefined,"composer-picker");element.setAttribute("role","menu");element.setAttribute("aria-label",title);element.setAttribute("popover","auto");
+  inheritSessionTheme(element,trigger);
   element.append(contextElement("div",title,"picker-heading"));
   for(const option of options) {
     const button=contextElement("button",undefined,"picker-option"+(option.danger?" is-danger":""));button.type="button";button.setAttribute("role",typeof option.selected==="boolean"?"menuitemradio":"menuitem");if(typeof option.selected==="boolean")button.setAttribute("aria-checked",String(option.selected));
@@ -2120,6 +2138,7 @@ function openModelBrowser(select,trigger) {
     $(".model-browser-close",modelBrowser).onclick=()=>modelBrowser.close();
     modelBrowser.addEventListener("click",event=>{if(event.target===modelBrowser){const r=modelBrowser.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)modelBrowser.close();}});
   }
+  inheritSessionTheme(modelBrowser,trigger);
   const search=$(".model-search",modelBrowser), results=$(".model-results",modelBrowser), load=$(".model-load-more",modelBrowser);
   let count=60;
   const recommended=new Set(recommendedModels(state.models).map(m=>m.value));
@@ -2140,11 +2159,13 @@ function openModelBrowser(select,trigger) {
   render();modelBrowser.showModal();search.focus();
 }
 function setLayout(count) {
+  closeBotPickers();
   if (!state.selectedRoom || count < 2 || count > 8) return;
   state.extra.forEach(pane => clearAttachmentDraft(pane));
   if (state.layout === count) {
     state.layout = 1;
     state.extra = [];
+    composerRecorder?.cancelIfStale();
     state.focusPane = 0;
     $("#pane-grid").dataset.panes = "1";
     $("#pane-grid").classList.remove("docked");
@@ -2183,6 +2204,8 @@ function setLayout(count) {
 function renderExtraPanes() {
   if(contextPopover?.pane)closeContextPopover();
   closeComposerPicker();
+  closeBotPickers();
+  composerRecorder?.cancelIfStale();
   syncProgressStreams();
   const grid = $("#pane-grid");
   const spans = { 5: [2, 2, 2, 3, 3], 7: [3, 3, 3, 3, 4, 4, 4] }[state.layout];
@@ -2207,6 +2230,7 @@ function renderExtraPanes() {
     header.className = "pane-bar";
     const title = document.createElement("h2");
     title.textContent = room?.name || "대화 선택";
+    bindSessionTitle(title,()=>pane.roomId);
     header.append(title);
     const desktopButton = document.createElement("button");
     desktopButton.type = "button";
@@ -2238,7 +2262,11 @@ function renderExtraPanes() {
     controls.className = "model-controls";
     controls.append(modelSelect(pane), effortSelect(pane));
     const tools=document.createElement("div");tools.className="composer-tools";
-    const footer=document.createElement("div");footer.className="composer-footer";footer.append(controls);
+    const footer=document.createElement("div");footer.className="composer-footer";
+    const leading=contextElement("div",undefined,"composer-leading-tools"),botTrigger=contextElement("button",undefined,"bot-picker-button bot-selector-trigger"),botPicker=contextElement("div",undefined,"bot-picker is-hidden");
+    botTrigger.type="button";botTrigger.append(icon("plus"));botTrigger.setAttribute("aria-label","응답할 봇 선택");botTrigger.title="응답할 봇 선택";botTrigger.setAttribute("aria-expanded","false");
+    botPicker.id="pane-bot-picker-"+index;botPicker.setAttribute("role","group");botPicker.setAttribute("aria-label","응답할 봇 선택");botTrigger.setAttribute("aria-controls",botPicker.id);
+    botTrigger.onclick=()=>toggleBotPicker(botTrigger,botPicker);leading.append(botTrigger,botPicker);footer.append(leading,controls);
     const row = document.createElement("div");
     row.className = "composer-row";
     const input = document.createElement("textarea");
@@ -2269,7 +2297,9 @@ function renderExtraPanes() {
     fileInput.type = "file"; fileInput.className = "sr-only"; fileInput.accept = "image/png,image/jpeg,image/webp,image/gif,audio/*"; fileInput.multiple = true;
     attach.onclick = () => { if (!composerBlocked(pane)) fileInput.click(); };
     fileInput.onchange = () => { void uploadAttachments(fileInput.files, pane); fileInput.value = ""; };
-    row.append(attach, fileInput, input, send);
+    const mic=contextElement("button",undefined,"bot-picker-button record-button"),cancel=contextElement("button","취소","record-cancel-button");
+    mic.type=cancel.type="button";mic._pane=pane;mic.append(icon("mic"));mic.setAttribute("aria-label","음성 녹음 시작");mic.title="음성 녹음";mic.onclick=()=>toggleRecording(pane);cancel.hidden=true;cancel.onclick=cancelActiveRecording;
+    row.append(attach, fileInput, mic, cancel, input, send);
     const attachmentList = document.createElement("div");
     attachmentList.className = "attachment-list"; attachmentList.setAttribute("aria-live", "polite");
     form.append(tools, row, attachmentList, footer);
@@ -2285,6 +2315,7 @@ function renderExtraPanes() {
 
   });
   applyModels(state.models);
+  syncRecordingButtons();
   applyDockLayout();
 }
 function modelSelect(pane) {
@@ -2320,7 +2351,7 @@ function effortSelect(pane) {
 async function submitPane(event, index, skipTopic = false) {
   event.preventDefault();
   const pane = state.extra[index];
-  if (!pane || composerBlocked(pane)) return;
+  if (!pane || composerBlocked(pane) || recordingBlocksSend(pane)) return;
   const sendSession = state.session;
   const sendCurrent = () => state.session?.user?.id === sendSession?.user?.id && state.session?.csrfToken === sendSession?.csrfToken;
   const form = event.currentTarget;
@@ -2438,6 +2469,7 @@ function assignExtra(index, roomId) {
 }
 function bind() {
   setupSidebarResize();
+  bindSessionTitle(els.roomTitle,()=>state.selectedRoom);
   document.body.append($("#profile-menu"));
   $("#create-sidebar-group").addEventListener("click",()=>openSidebarGroupEditor());
   $("#sidebar-search-toggle").addEventListener("click",()=>{
@@ -2448,17 +2480,13 @@ function bind() {
   $("#session-search").addEventListener("keydown",event=>{if(event.key==="Escape"){event.stopPropagation();$("#sidebar-search-toggle").click();$("#sidebar-search-toggle").focus();}});
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      $("#bot-picker").classList.add("is-hidden");
-      $("#bot-picker-button").setAttribute("aria-expanded", "false");
+      closeBotPickers();
       els.memberPanel.classList.remove("is-open");
       closeSidebar();
     }
   });
   document.addEventListener("click", (event) => {
-    if (!event.target.closest("#bot-picker, #bot-picker-button")) {
-      $("#bot-picker").classList.add("is-hidden");
-      $("#bot-picker-button").setAttribute("aria-expanded", "false");
-    }
+    if (!event.target.closest(".bot-picker, .bot-selector-trigger")) closeBotPickers();
   });
   $$("[data-auth-tab]").forEach((button) =>
     button.addEventListener("click", () => switchAuth(button.dataset.authTab)),
@@ -2511,14 +2539,9 @@ function bind() {
     uploadAttachments(event.target.files);
     event.target.value = "";
   });
-  $("#record-button").addEventListener("click", toggleRecording);
+  $("#record-button").addEventListener("click", () => toggleRecording());
   $("#voice-call-button").addEventListener("click", () => voiceUI?.open(state.rooms.find(room => room.id === currentBranchId())));
-  $("#record-cancel-button").addEventListener("click", () => {
-    if (!state.recording) return;
-    state.recordingCancelled = true;
-    state.recording.stop();
-    toast("녹음을 취소했습니다.");
-  });
+  $("#record-cancel-button").addEventListener("click", cancelActiveRecording);
   $("#message-input").addEventListener("paste", event => pasteAttachments(event));
   $("#message-input").addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -2531,11 +2554,7 @@ function bind() {
     event.target.style.height = "auto";
     event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
   });
-  $("#bot-picker-button").addEventListener("click", () => {
-    const picker = $("#bot-picker");
-    const hidden = picker.classList.toggle("is-hidden");
-    $("#bot-picker-button").setAttribute("aria-expanded", String(!hidden));
-  });
+  $("#bot-picker-button").addEventListener("click", event => toggleBotPicker(event.currentTarget,$("#bot-picker")));
   $("#members-toggle").addEventListener("click", () =>
     els.memberPanel.classList.toggle("is-open"),
   );
@@ -2861,7 +2880,12 @@ function setupDock() {
     action.onclick=()=>begin(room?.dataset.dockRoom || dockRoomAt(Number(panel.dataset.dockIndex)));menu.append(action);
     const targetRoom=state.rooms.find(r=>r.id===(room?.dataset.dockRoom || dockRoomAt(Number(panel.dataset.dockIndex))));
     if(targetRoom) {
+      paintSession(menu,sessionColors(state.rooms,state.forks).get(targetRoom.id));
       const addAction=(label,handler)=>{const b=document.createElement("button");b.type="button";b.setAttribute("role","menuitem");b.textContent=label;b.onclick=()=>{menu.hidden=true;handler();};menu.append(b);};
+      if(targetRoom.id!==MONITOR_ROOM){
+        if(targetRoom.role==="owner")addAction("제목 변경",()=>openSessionRename(targetRoom.id));
+        addAction("색상 변경",()=>openSessionColor(targetRoom.id));
+      }
       if(targetRoom.id!==MONITOR_ROOM&&!targetRoom.archived){
         addAction("여기서 Fork",()=>void sessionAction("fork",null,null,null,null,targetRoom.id));
         addAction("다른 가지와 Merge",()=>mergeBranch(targetRoom.id));

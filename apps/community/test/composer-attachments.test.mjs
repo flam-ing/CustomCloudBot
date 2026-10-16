@@ -27,8 +27,8 @@ test("paste reads screenshot items or files once and leaves ordinary text/defaul
 function draft({ upload, current = () => true, owner = { pendingAttachments: [], attachmentGeneration: 0 } } = {}) {
   const changes = [], notices = [], calls = [], revoked = [];
   const options = { owner, roomId: "room-a", isCurrent: current, changed: () => changes.push(owner.pendingAttachments.map(item => ({ name: item.name, uploading: item.uploading }))), notify: message => notices.push(message),
-    createPreview: file => `blob:${file.name}`, upload: async (...args) => { calls.push(args); return upload ? upload(...args) : { attachment: { id: args[0].name, name: args[1] } }; } };
-  return { owner, changes, notices, calls, revoked, add: files => uploadAttachmentFiles({ ...options, files }), remove: item => removeAttachmentDraft(owner, item, url => revoked.push(url)), clear: () => clearAttachmentDraft(owner, url => revoked.push(url)) };
+    createPreview: file => `blob:${file.name}`, revokePreview: url => revoked.push(url), upload: async (...args) => { calls.push(args); return upload ? upload(...args) : { attachment: { id: args[0].name, name: args[1] } }; } };
+  return { owner, changes, notices, calls, revoked, add: (files, extra = {}) => uploadAttachmentFiles({ ...options, files, ...extra }), remove: item => removeAttachmentDraft(owner, item, url => revoked.push(url)), clear: () => clearAttachmentDraft(owner, url => revoked.push(url)) };
 }
 
 test("all four previews appear immediately while uploads serialize across split composers", async () => {
@@ -124,4 +124,43 @@ test("main and split uploads cannot be sent before success or lost on failed sen
     const app = setupSubmit({ paneMode, fail: true }); await app.submit();
     assert.equal((paneMode ? app.pane : app.state).pendingAttachments[0].attachment.id, "image-1");
   }
+});
+
+
+test("recording cancellation removes only its batch, aborts its upload and ignores late success", async () => {
+  const reply = deferred(), app = draft({ upload: () => reply.promise }), cancel = new AbortController();
+  const existing = { name: "keep.png", attachment: { id: "keep" }, previewUrl: "blob:keep.png", controller: new AbortController() };
+  app.owner.pendingAttachments.push(existing);
+  const generation = app.owner.attachmentGeneration;
+  const pending = app.add([file("voice.mp4", "audio/mp4")], { signal: cancel.signal });
+  await tick(); const recording = app.owner.pendingAttachments[1];
+  cancel.abort();
+  assert.equal(app.calls[0][2].aborted, true);
+  assert.deepEqual(app.owner.pendingAttachments, [existing]);
+  assert.equal(existing.controller.signal.aborted, false);
+  assert.equal(app.owner.attachmentGeneration, generation);
+  assert.deepEqual(app.revoked, ["blob:voice.mp4"]);
+  reply.resolve({ attachment: { id: "late-voice" } }); await pending;
+  assert.equal(recording.attachment, null); assert.deepEqual(app.owner.pendingAttachments, [existing]);
+  assert.equal(app.notices.length, 0);
+});
+
+test("an aborted recording cannot reserve a preview or start an upload queued behind another draft", async () => {
+  const before = new AbortController(); before.abort();
+  const ready = draft(); await ready.add([file("voice.mp4", "audio/mp4")], { signal: before.signal });
+  assert.equal(ready.owner.pendingAttachments.length, 0); assert.equal(ready.calls.length, 0); assert.equal(ready.changes.length, 0);
+  const reply = deferred(), app = draft({ upload: () => reply.promise });
+  const first = app.add([file("keep.png")]); await tick();
+  const cancel = new AbortController(), recording = app.add([file("voice.mp4", "audio/mp4")], { signal: cancel.signal });
+  cancel.abort(); reply.resolve({ attachment: { id: "keep" } }); await Promise.all([first, recording]);
+  assert.equal(app.calls.length, 1); assert.equal(app.owner.pendingAttachments.length, 1);
+  assert.equal(app.owner.pendingAttachments[0].attachment.id, "keep");
+  assert.deepEqual(app.revoked, ["blob:voice.mp4"]);
+});
+
+test("completed upload removes its cancellation listener so an old signal cannot delete the attachment", async () => {
+  const app = draft(), cancel = new AbortController();
+  await app.add([file("voice.mp4", "audio/mp4")], { signal: cancel.signal });
+  const item = app.owner.pendingAttachments[0]; cancel.abort();
+  assert.equal(app.owner.pendingAttachments[0], item); assert.equal(item.controller.signal.aborted, false); assert.deepEqual(app.revoked, []);
 });

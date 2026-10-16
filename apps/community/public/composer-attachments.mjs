@@ -42,12 +42,12 @@ export function clearAttachmentDraft(owner, revoke = url => URL.revokeObjectURL(
   owner.pendingAttachments = [];
 }
 
-export async function uploadAttachmentFiles({ files, owner, roomId, isCurrent, upload, changed, notify,
-  createPreview = file => URL.createObjectURL(file) }) {
-  if (!roomId || !isCurrent()) return;
+export async function uploadAttachmentFiles({ files, owner, roomId, isCurrent, upload, changed, notify, signal,
+  createPreview = file => URL.createObjectURL(file), revokePreview = url => URL.revokeObjectURL(url) }) {
+  if (!roomId || !isCurrent() || signal?.aborted) return;
   owner.pendingAttachments ||= [];
   const generation = owner.attachmentGeneration || 0;
-  const current = () => isCurrent() && (owner.attachmentGeneration || 0) === generation;
+  const current = () => !signal?.aborted && isCurrent() && (owner.attachmentGeneration || 0) === generation;
   const accepted = [];
   for (const file of Array.from(files || [])) {
     if (!kindOf(file)) { notify("PNG, JPEG, WebP, GIF 사진 또는 지원되는 음성 파일만 첨부할 수 있어요."); continue; }
@@ -66,21 +66,34 @@ export async function uploadAttachmentFiles({ files, owner, roomId, isCurrent, u
     owner.pendingAttachments.push(item);
     return { file, item };
   });
-  if (batch.length) changed();
-  await Promise.all(batch.map(async ({ file, item }) => {
-    const belongs = () => current() && owner.pendingAttachments.includes(item);
-    try {
-      if (!belongs()) return;
-      const data = await scheduleUpload(() => belongs() ? upload(file, item.name, item.controller.signal) : null);
-      if (!belongs()) return;
-      if (!data?.attachment?.id) throw new Error("첨부 파일을 확인하지 못했습니다. 다시 첨부해 주세요.");
-      item.attachment = data.attachment;
-      item.name = data.attachment.name || item.name;
-    } catch (error) {
-      if (!belongs()) return;
-      item.error = error.message || "업로드하지 못했습니다.";
-    } finally {
-      if (belongs()) { item.uploading = false; changed(); }
+  // A recorder's cancel signal owns only this batch. Do not invalidate another
+  // screenshot/audio draft already in the same composer or its upload generation.
+  const cancelBatch = () => {
+    let removed = false;
+    for (const { item } of batch) if (owner.pendingAttachments.includes(item)) {
+      removeAttachmentDraft(owner, item, revokePreview); removed = true;
     }
-  }));
+    if (removed && isCurrent() && (owner.attachmentGeneration || 0) === generation) changed();
+  };
+  signal?.addEventListener("abort", cancelBatch, { once: true });
+  if (signal?.aborted) cancelBatch();
+  else if (batch.length) changed();
+  try {
+    await Promise.all(batch.map(async ({ file, item }) => {
+      const belongs = () => current() && owner.pendingAttachments.includes(item);
+      try {
+        if (!belongs()) return;
+        const data = await scheduleUpload(() => belongs() ? upload(file, item.name, item.controller.signal) : null);
+        if (!belongs()) return;
+        if (!data?.attachment?.id) throw new Error("첨부 파일을 확인하지 못했습니다. 다시 첨부해 주세요.");
+        item.attachment = data.attachment;
+        item.name = data.attachment.name || item.name;
+      } catch (error) {
+        if (!belongs()) return;
+        item.error = error.message || "업로드하지 못했습니다.";
+      } finally {
+        if (belongs()) { item.uploading = false; changed(); }
+      }
+    }));
+  } finally { signal?.removeEventListener("abort", cancelBatch); }
 }

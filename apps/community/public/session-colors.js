@@ -21,11 +21,32 @@ function rgb(hue, saturation, lightness) {
   }).join(', ');
 }
 
+function customColor(value) {
+  if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return null;
+  const channels = [1, 3, 5].map(offset => parseInt(value.slice(offset, offset + 2), 16));
+  const [r, g, b] = channels.map(channel => channel / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+  const light = (max + min) / 2;
+  let hue = 0;
+  if (delta) hue = ((max === r ? (g - b) / delta : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60 + 360) % 360;
+  return {hue, saturation: delta ? delta / (1 - Math.abs(2 * light - 1)) : 0, tint: channels.join(', '), accent: value.toLowerCase()};
+}
+
+function foreground(tint) {
+  const luminance = tint.split(', ').map(Number).map(channel => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? '#000000' : '#ffffff';
+}
+
 /**
- * @returns {Map<string, {hue: number, tint: string, color: string}>}
+ * @returns {Map<string, {hue: number, tint: string, color: string, accent: string, foreground: string}>}
  * Pass all accessible rooms, including archived ancestors. Merge branches follow
  * their primary parent; missing parents start a new family. tint is an RGB tuple
  * for translucent surfaces, while color is dark enough for text on light glass.
+ * A saved room.color overrides that room and anchors its automatic descendants.
+ * accent preserves the selected color; foreground is readable on that accent.
  */
 export function sessionColors(rooms = [], forks = []) {
   const ids = new Set((Array.isArray(rooms) ? rooms : [])
@@ -65,7 +86,8 @@ export function sessionColors(rooms = [], forks = []) {
     root ??= roots.get(current);
     for (const member of path) roots.set(member, root);
   }
-  const colors = new Map(), offsets = new Map(), children = new Map([...ids].map(id => [id, []]));
+  const overrides = new Map((Array.isArray(rooms) ? rooms : []).filter(room => room && ids.has(room.id)).map(room => [room.id, customColor(room.color)]));
+  const colors = new Map(), offsets = new Map(), families = new Map(), children = new Map([...ids].map(id => [id, []]));
   const created = new Map((Array.isArray(rooms) ? rooms : []).filter(room => room && ids.has(room.id)).map(room => [room.id, typeof room.createdAt === 'number' ? room.createdAt : Date.parse(room.createdAt) || 0]));
   for (const id of ids) {
     const parent = parents.get(id);
@@ -78,23 +100,29 @@ export function sessionColors(rooms = [], forks = []) {
   const usedByParent = new Map();
   const pending = [...ids].filter(id => id === roots.get(id));
   for (let cursor = 0; cursor < pending.length; cursor += 1) {
-    const id = pending[cursor], root = roots.get(id), base = hash('root:' + root) % 360;
-    const seed = hash('fork:' + id), parentOffset = offsets.get(parents.get(id)) ?? 0;
+    const id = pending[cursor], root = roots.get(id), override = overrides.get(id);
+    const family = override ? {hue: override.hue, saturation: override.saturation} : families.get(parents.get(id)) ?? {hue: hash('root:' + root) % 360};
+    families.set(id, family);
+    const base = family.hue, seed = hash('fork:' + id), parentOffset = offsets.get(parents.get(id)) ?? 0;
     const used = usedByParent.get(parents.get(id)) ?? new Set();
     const choices = [-48, -36, -24, -12, 0, 12, 24, 36, 48].filter(value => Math.abs(value - parentOffset) >= 24);
     const separation = value => Math.min(...[...used].map(previous => Math.abs(value - previous)), 96);
     const best = Math.max(...choices.map(separation));
     const available = choices.filter(value => separation(value) === best);
-    const variation = id === root ? 0 : available[seed % available.length];
-    if (id !== root) { used.add(variation); usedByParent.set(parents.get(id), used); }
-    const hue = (base + variation + 360) % 360;
+    const automaticVariation = id === root ? 0 : available[seed % available.length];
+    const variation = override ? 0 : automaticVariation;
+    // Reserve the same sibling slot when only this room is customized.
+    if (id !== root) { used.add(automaticVariation); usedByParent.set(parents.get(id), used); }
+    const hue = Math.round(((base + variation + 360) % 360) * 100) / 100 % 360;
     // Alternate light/dark tints as well as hue. Pale glass otherwise makes even
     // fairly different neighboring blues look almost identical.
     const light = id === root ? 0.60 : variation > 0 ? 0.50 + (seed % 5) / 100 : 0.67 + (seed % 5) / 100;
-    const saturation = id === root ? 0.65 : variation > 0 ? 0.73 : 0.56;
+    const saturation = family.saturation ?? (id === root ? 0.65 : variation > 0 ? 0.73 : 0.56);
     const textSaturation = id === root ? 54 : variation > 0 ? 64 : 48;
     const textLightness = id === root ? 27 : variation > 0 ? 24 : 28;
-    colors.set(id, {hue, tint: rgb(hue, saturation, light), color: `hsl(${hue} ${textSaturation}% ${textLightness}%)`});
+    const tint = override?.tint ?? rgb(hue, saturation, light);
+    const color = family.saturation !== undefined ? `hsl(${hue} ${Math.round(Math.min(saturation * 100, 64))}% 24%)` : `hsl(${hue} ${textSaturation}% ${textLightness}%)`;
+    colors.set(id, {hue, tint, color, accent: override?.accent ?? `rgb(${tint})`, foreground: foreground(tint)});
     offsets.set(id, variation);
     pending.push(...children.get(id));
   }

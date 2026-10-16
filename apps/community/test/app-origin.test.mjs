@@ -54,7 +54,7 @@ test('host-specific app support does not relax cross-site API or subresource pro
 test('chat rendering modules are served as JavaScript on both web and installed-app hosts',async t=>{
   const app=await fixture(t);
   for(const host of ['bots.example.test','192.0.2.10']){
-    for(const [path,exportName] of [['/transcript.mjs','renderTranscript'],['/message-format.mjs','renderMessageText']]){
+    for(const [path,exportName] of [['/transcript.mjs','renderTranscript'],['/message-format.mjs','renderMessageText'],['/composer-recorder.mjs','createComposerRecorder']]){
       const module=await request(app,{host,path,headers:{'sec-fetch-site':'same-origin','sec-fetch-mode':'cors','sec-fetch-dest':'script'}});
       assert.equal(module.status,200,path);
       assert.match(module.headers['content-type'],/^text\/javascript\b/);
