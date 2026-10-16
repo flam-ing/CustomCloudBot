@@ -2,8 +2,8 @@
    sizes stay with their components; this file owns color, depth and surfaces. */
 :root {
   color-scheme: light;
-  --bg: #e7edf1;
-  --sidebar: linear-gradient(115deg, rgba(255, 255, 255, .30), rgba(255, 255, 255, .08));
+  --bg: #d9e3e9;
+  --sidebar: var(--glass-reflection), rgba(246, 249, 255, .12);
   --surface: rgba(255, 255, 255, .20);
   --text: #2e3242;
   --muted: #606679;
@@ -22,21 +22,24 @@
   --session-accent: #7956b5;
   --session-on-accent: #fff;
   --glass-field: rgba(255, 255, 255, .23);
-  --glass-panel: linear-gradient(135deg, rgba(255, 255, 255, .38), rgba(255, 255, 255, .08) 55%, rgba(255, 255, 255, .19)), rgba(248, 250, 254, .48);
-  --glass-shadow: 0 10px 32px rgba(45, 62, 89, .09), 0 2px 7px rgba(45, 62, 89, .035), inset 0 1px 0 rgba(255, 255, 255, .92), inset 0 -1px 0 rgba(255, 255, 255, .24);
-  --glass-popover-shadow: 0 22px 64px rgba(45, 62, 89, .15), 0 4px 14px rgba(45, 62, 89, .045), inset 0 1px 0 rgba(255, 255, 255, .84);
+  --glass-edge: rgba(255, 255, 255, .92) rgba(160, 180, 200, .30) rgba(117, 138, 161, .22) rgba(255, 255, 255, .72);
+  --glass-reflection: linear-gradient(112deg, rgba(255, 255, 255, .50), rgba(255, 255, 255, .14) 28%, rgba(255, 255, 255, .03) 48%, rgba(82, 98, 128, .045) 70%, rgba(255, 255, 255, .20));
+  --glass-panel: var(--glass-reflection), rgba(244, 249, 253, .46);
+  --glass-shadow: 0 12px 32px rgba(45, 62, 89, .10), 0 2px 6px rgba(45, 62, 89, .045), inset 0 1px 0 rgba(255, 255, 255, .98), inset 1px 0 0 rgba(255, 255, 255, .56), inset 0 -1px 0 rgba(93, 116, 142, .14);
+  --glass-popover-shadow: 0 22px 64px rgba(45, 62, 89, .15), 0 4px 14px rgba(45, 62, 89, .045), inset 0 1px 0 rgba(255, 255, 255, .90), inset 1px 0 0 rgba(255, 255, 255, .40), inset 0 -1px 0 rgba(93, 116, 142, .12);
   --glass-backdrop: blur(22px) saturate(165%);
   background: var(--bg);
   color: var(--text);
 }
 
-/* A quiet continuous backdrop gives glass a little color to transmit without
-   adding a pattern, spotlight, or a separate decorative layer. */
+/* One broad window reflection crosses a continuous, cool backdrop. The soft
+   falloff and darker edges give the glass light to transmit without a pattern. */
 body {
   background:
-    linear-gradient(125deg, rgba(175, 157, 208, .38), transparent 56%),
-    linear-gradient(215deg, rgba(144, 197, 209, .36), transparent 64%),
-    linear-gradient(20deg, transparent 55%, rgba(214, 172, 199, .30)),
+    linear-gradient(118deg, transparent 8%, rgba(255, 255, 255, .07) 23%, rgba(255, 255, 255, .68) 32%, rgba(255, 255, 255, .38) 39%, transparent 53%),
+    radial-gradient(ellipse at 94% 4%, rgba(255, 255, 255, .78), transparent 55%),
+    linear-gradient(122deg, rgba(141, 143, 173, .30), transparent 47%, rgba(147, 155, 178, .08) 68%, rgba(171, 148, 183, .27)),
+    linear-gradient(25deg, rgba(173, 212, 219, .20), transparent 62%),
     var(--bg);
   background-attachment: fixed;
 }
@@ -60,7 +63,7 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .sidebar {
   background: var(--sidebar);
   border-color: rgba(255, 255, 255, .65);
-  box-shadow: 5px 0 24px rgba(45, 62, 89, .045), inset -1px 0 0 rgba(255, 255, 255, .28);
+  box-shadow: 6px 0 28px rgba(45, 62, 89, .055), inset -1px 0 0 rgba(255, 255, 255, .72), inset -2px 0 0 rgba(110, 128, 152, .08);
   -webkit-backdrop-filter: var(--glass-backdrop);
   backdrop-filter: var(--glass-backdrop);
 }
@@ -139,7 +142,7 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 
 .composer {
   background: rgba(255, 255, 255, .27);
-  border-color: rgba(255, 255, 255, .72);
+  border-color: var(--glass-edge);
   box-shadow: var(--glass-shadow);
   -webkit-backdrop-filter: var(--glass-backdrop);
   backdrop-filter: var(--glass-backdrop);
@@ -193,7 +196,7 @@ input::placeholder, textarea::placeholder { color: var(--dim); opacity: 1; }
 .bot-picker, .image-dialog, .member-panel, .toast, .workspace-popup, .profile-menu {
   background: var(--glass-panel);
   color: var(--text);
-  border-color: #ffffffe6;
+  border-color: var(--glass-edge);
   box-shadow: var(--glass-popover-shadow);
   -webkit-backdrop-filter: var(--glass-backdrop);
   backdrop-filter: var(--glass-backdrop);
@@ -240,7 +243,7 @@ dialog::backdrop,
 }
 /* Conversation colors follow the input controls and the detached menus they open. */
 .room-view .composer {
-  background: linear-gradient(125deg, rgba(255, 255, 255, .40), rgba(255, 255, 255, .09) 50%, rgba(255, 255, 255, .22)), rgba(var(--pane-tint), .025);
+  background: var(--glass-reflection), rgba(var(--pane-tint), .035);
 }
 .room-view .composer:focus-within {
   border-color: rgba(var(--pane-tint), .42);
@@ -267,7 +270,7 @@ dialog::backdrop,
 .composer-picker, .context-popover, .quick-model-picker, .model-browser,
 .model-change-dialog, .bot-picker, .session-edit-dialog {
   background: linear-gradient(rgba(var(--pane-tint), .035), rgba(var(--pane-tint), .035)), var(--glass-panel);
-  border-color: rgba(255, 255, 255, .86);
+  border-color: var(--glass-edge);
 }
 .composer-picker .picker-option[aria-selected="true"],
 .composer-picker .picker-option[aria-checked="true"],
@@ -476,7 +479,7 @@ dialog::backdrop,
 .workspace-browser-help { background: #faf8fff0; color: var(--muted); border-color: var(--line); }
 
 @media (max-width: 720px) {
-  .sidebar { background: linear-gradient(115deg, rgba(255, 255, 255, .48), rgba(248, 250, 254, .32)); }
+  .sidebar { background: var(--glass-reflection), rgba(248, 250, 254, .28); }
 }
 @media (max-width: 420px) {
   .auth-panel { padding: 26px 22px; }
@@ -484,7 +487,7 @@ dialog::backdrop,
 
 /* Glass remains legible when blur is unavailable or transparency is reduced. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root { --sidebar: #f5f6fa; --glass-panel: #fafbff; --surface: #fff; }
+  :root { --sidebar: #f5f6fa; --glass-panel: #fafbff; --surface: #fff; --glass-reflection: none; }
   .topbar, .composer, .auth-panel, .sidebar { background: #fafbff; }
   .room-view .composer, .composer-picker, .context-popover, .quick-model-picker,
   .model-browser, .model-change-dialog, .bot-picker, .session-edit-dialog {
@@ -501,7 +504,7 @@ dialog::backdrop,
   :root {
     --sidebar: #f5f6fa; --surface: #fff; --glass-panel: #fafbff;
     --bot-bubble: #fff; --own-bubble: #e8def7; --glass-field: #fff;
-    --glass-backdrop: none;
+    --glass-backdrop: none; --glass-reflection: none;
   }
   body { background: var(--bg); }
   .topbar, .composer, .auth-panel, .sidebar { background: #fafbff; }
